@@ -1,96 +1,79 @@
-import asyncio
 from pyrogram import Client
-from config import load_config
-from fetcher.fetcher import list_channels
-from fetcher.storage_file import FileStorage
+from fetcher.fetcher import TelegramFetcher
+from fetcher.storage_file import FileKeyValueStorage
+import os
+import asyncio
+from dotenv import load_dotenv
 
-# Global state
-ACTIVE_CHANNEL = None  # Keeps track of the active channel
+# Load environment variables
+load_dotenv()
+API_ID = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
+CHAT_ID = int(os.getenv("CHAT_ID"))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE"))
+OUTPUT_DIR = os.getenv("OUTPUT_DIR")
 
-def use_channel(channel_id):
-    """Set the active channel for fetching messages."""
-    global ACTIVE_CHANNEL
-    ACTIVE_CHANNEL = channel_id
-    print(f"Active channel set to: {channel_id}")
+# Initialize components
+storage = FileKeyValueStorage(OUTPUT_DIR)
 
+async def main():
+    async with Client("my_session", api_id=API_ID, api_hash=API_HASH) as app:
+        fetcher = TelegramFetcher(app=app, storage=storage, chat_id=CHAT_ID, batch_size=BATCH_SIZE)
+        
+        print("Telegram Fetcher Interactive CLI")
+        print("Type 'help' for available commands.")
 
-def join_channel(app, invite_link_or_id):
-    """Join a new channel using an invite link or ID."""
-    print(f"Mock: Joining channel with {invite_link_or_id}...")
-    print("Successfully joined the channel!")
-
-
-async def fetch_new(app, storage, config):
-    """Fetch the newest messages from the active channel."""
-    if not ACTIVE_CHANNEL:
-        print("Error: No active channel selected. Use the 'use' command to select one.")
-        return
-    config["CHAT_ID"] = ACTIVE_CHANNEL
-    await fetch_newest_messages(app, storage, config)
-
-
-async def fetch_old(app, storage, config):
-    """Fetch the oldest messages from the active channel."""
-    if not ACTIVE_CHANNEL:
-        print("Error: No active channel selected. Use the 'use' command to select one.")
-        return
-    config["CHAT_ID"] = ACTIVE_CHANNEL
-    await fetch_oldest_messages(app, storage, config)
-
-
-def segregate_messages(storage):
-    """Segregate fetched messages into topic-based files."""
-    print("Mock: Segregating fetched messages by topic...")
-    # Logic for segregation would go here
-
-
-def simplify_messages(storage):
-    """Simplify fetched messages by retaining only necessary fields."""
-    print("Mock: Simplifying fetched messages...")
-    # Logic for simplifying would go here
-
-
-def main():
-    """Main entry point for the application."""
-    try:
-        # Load configuration
-        config = load_config()
-
-        # Initialize storage
-        storage = FileStorage(config["OUTPUT_DIR"])
-
-        # Initialize Pyrogram client
-        app = Client("sessions/m_38", api_id=config["API_ID"], api_hash=config["API_HASH"])
-
-        # Command loop
         while True:
-            command = input("Enter a command (list/use/join/fetch/segregate/simplify/exit): ").strip()
-            if command == "list":
-                list_channels(app)
-            elif command.startswith("use"):
-                _, channel_id = command.split(maxsplit=1)
-                use_channel(channel_id)
-            elif command.startswith("join"):
-                _, invite_link_or_id = command.split(maxsplit=1)
-                join_channel(app, invite_link_or_id)
-            elif command == "fetch new":
-                asyncio.run(fetch_new(app, storage, config))
-            elif command == "fetch old":
-                asyncio.run(fetch_old(app, storage, config))
-            elif command == "segregate":
-                segregate_messages(storage)
-            elif command == "simplify":
-                simplify_messages(storage)
-            elif command == "exit":
-                print("Exiting application.")
-                break
-            else:
-                print("Unknown command. Try 'list', 'use', 'join', 'fetch', 'segregate', 'simplify', or 'exit'.")
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        print("Application exited.")
+            command = input("> ").strip().lower()
+            if not command:
+                continue
 
+            args = command.split()
+            cmd = args[0]
+            params = args[1:]
+
+            if cmd in ["fetch_new", "fn"]:
+                await fetcher.fetch_new()
+
+            elif cmd in ["fetch_old", "fo"]:
+                await fetcher.fetch_old()
+
+            elif cmd in ["fetch_scan", "fs"]:
+                await fetcher.fetch_scan()
+
+            elif cmd in ["fetch_gap", "fg"]:
+                if len(params) != 2:
+                    print("Usage: fetch_gap <start_id> <end_id>")
+                    continue
+                try:
+                    start_id, end_id = int(params[0]), int(params[1])
+                    await fetcher.fetch_gap(start_id, end_id)
+                except ValueError:
+                    print("Error: start_id and end_id must be integers.")
+
+            elif cmd in ["list_chan", "lc"]:
+                await fetcher.list_channels()
+
+            elif cmd in ["status", "st"]:
+                fetcher.show_status()
+
+            elif cmd in ["exit", "quit", "q"]:
+                print("Exiting gracefully...")
+                await fetcher.stop_current_task()
+                break
+
+            elif cmd == "help":
+                print("Available commands:")
+                print("  fetch_new (fn)   - Fetch newest messages")
+                print("  fetch_old (fo)   - Fetch oldest messages")
+                print("  fetch_scan (fs)  - Scan for missing messages")
+                print("  fetch_gap (fg) <start_id> <end_id> - Fetch specific gap")
+                print("  list_chan (lc)   - List available channels")
+                print("  status (st)      - Show status of ongoing tasks")
+                print("  exit (q, quit)   - Exit application")
+
+            else:
+                print(f"Unknown command: {cmd}. Type 'help' for a list of commands.")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

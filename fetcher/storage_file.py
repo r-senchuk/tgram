@@ -1,59 +1,81 @@
 import json
 from pathlib import Path
-from .storage import Storage
 
 
-class FileStorage(Storage):
+class FileKeyValueStorage:
     """
-    File-based storage for offsets and processed_ranges.
-    Stores data in a JSON file.
+    A file-based implementation of the KeyValueStorage abstraction.
+    Stores messages as key-value pairs in a JSON file.
     """
 
-    def __init__(self, output_dir):
-        self.offset_file = Path(output_dir) / "last_offsets.json"
-        self.offset_file.parent.mkdir(parents=True, exist_ok=True)  # Ensure the output directory exists
+    def __init__(self, file_path):
+        self.file_path = Path(file_path)
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.file_path.exists():
+            with self.file_path.open("w", encoding="utf-8") as f:
+                json.dump({}, f)
 
-    def load_offsets(self):
-        """Load processed_ranges and offsets from the file."""
-        if self.offset_file.exists():
-            with self.offset_file.open("r", encoding="utf-8") as file:
-                return json.load(file)
-        return {"processed_ranges": []}
+    def _load_data(self):
+        """Load all data from the storage file."""
+        with self.file_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
 
-    def save_offsets(self, offsets):
-        """Save processed_ranges and offsets to the file."""
-        with self.offset_file.open("w", encoding="utf-8") as file:
-            json.dump(offsets, file, ensure_ascii=False, indent=4)
+    def _save_data(self, data):
+        """Save all data to the storage file."""
+        with self.file_path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
 
-    def update_processed_range(self, message_id):
-        """Add a message ID to processed_ranges and save."""
-        offsets = self.load_offsets()
-        processed_ranges = offsets.get("processed_ranges", [])
-        processed_ranges.append({"start": message_id, "end": message_id})
-        offsets["processed_ranges"] = self._normalize_processed_ranges(processed_ranges)
-        self.save_offsets(offsets)
-
-    def get_processed_ranges(self):
-        """Retrieve all processed ranges."""
-        return self.load_offsets().get("processed_ranges", [])
-
-    def _normalize_processed_ranges(self, processed_ranges):
+    def save_message(self, message_id, message_content):
         """
-        Normalize processed_ranges by merging overlapping or adjacent ranges.
-        Ensures no duplicates or gaps between ranges.
+        Save a single raw message to storage.
+        Args:
+            message_id (int): The unique message ID.
+            message_content (dict): The raw message content.
         """
-        if not processed_ranges:
-            return []
+        data = self._load_data()
+        data[str(message_id)] = message_content
+        self._save_data(data)
 
-        # Sort ranges by start value
-        processed_ranges.sort(key=lambda r: r["start"])
+    def load_message(self, message_id):
+        """
+        Load a single message by ID.
+        Args:
+            message_id (int): The unique message ID.
+        Returns:
+            dict or None: The raw message content, or None if not found.
+        """
+        data = self._load_data()
+        return data.get(str(message_id))
 
-        # Merge overlapping or adjacent ranges
-        merged = [processed_ranges[0]]
-        for current in processed_ranges[1:]:
-            last = merged[-1]
-            if last["end"] + 1 >= current["start"]:  # Overlap or adjacent
-                last["end"] = max(last["end"], current["end"])
-            else:
-                merged.append(current)
-        return merged
+    def load_all_messages(self):
+        """
+        Load all stored messages.
+        Returns:
+            dict: All stored messages, excluding non-message metadata.
+        """
+        data = self._load_data()
+        return {k: v for k, v in data.items() if k.isdigit()}
+
+    def is_message_processed(self, message_id):
+        """
+        Check if a message ID has already been processed.
+        Args:
+            message_id (int): The unique message ID.
+        Returns:
+            bool: True if the message is already processed, False otherwise.
+        """
+        data = self._load_data()
+        return str(message_id) in data
+
+    def find_gaps(self):
+        """
+        Identify missing message ID ranges in the storage.
+        Returns:
+            list[tuple[int, int]]: A list of (start, end) tuples representing missing ranges.
+        """
+        all_ids = sorted(int(k) for k in self._load_data().keys() if k.isdigit())
+        gaps = []
+        for i in range(1, len(all_ids)):
+            if all_ids[i] > all_ids[i - 1] + 1:
+                gaps.append((all_ids[i - 1] + 1, all_ids[i] - 1))
+        return gaps

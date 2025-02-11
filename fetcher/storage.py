@@ -1,48 +1,38 @@
 from abc import ABC, abstractmethod
 
 
-class Storage(ABC):
+class KeyValueStorage(ABC):
     """
-    Abstract base class for storage backends.
-    Provides an interface for managing offsets and processed_ranges.
+    Abstract interface for key-value storage.
+    Handles message saving, loading, and checking processed status.
     """
 
     @abstractmethod
-    def load_offsets(self):
+    def save_message(self, message_id, message_content):
+        """Save a single raw message."""
+        pass
+
+    @abstractmethod
+    def load_message(self, message_id):
+        """Load a single message by ID."""
+        pass
+
+    @abstractmethod
+    def load_all_messages(self):
+        """Load all stored messages."""
+        pass
+
+    @abstractmethod
+    def is_message_processed(self, message_id):
+        """Check if a message ID has already been processed."""
+        pass
+
+    @abstractmethod
+    def find_gaps(self):
         """
-        Load offsets and processed_ranges from the storage backend.
+        Identify gaps in the stored message ID ranges.
         
         Returns:
-            dict: A dictionary containing the offsets and processed_ranges.
-        """
-        pass
-
-    @abstractmethod
-    def save_offsets(self, offsets):
-        """
-        Save offsets and processed_ranges to the storage backend.
-        
-        Args:
-            offsets (dict): The data to be saved, including processed_ranges.
-        """
-        pass
-
-    @abstractmethod
-    def update_processed_range(self, message_id):
-        """
-        Add a message ID to the processed_ranges and save the updated data.
-        
-        Args:
-            message_id (int): The ID of the message to add to processed_ranges.
-        """
-        pass
-
-    @abstractmethod
-    def get_processed_ranges(self):
-        """
-        Retrieve all processed_ranges from the storage backend.
-        
-        Returns:
-            list: A list of dictionaries representing processed ranges.
+            list[tuple[int, int]]: A list of (start, end) tuples representing missing ranges.
         """
         pass
