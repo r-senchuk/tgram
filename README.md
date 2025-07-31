@@ -2,45 +2,57 @@
 
 ## Overview
 
-This application fetches messages from a specified Telegram channel and supports various commands to interactively or programmatically retrieve data.
+This application provides a robust command-line interface (CLI) for fetching and archiving messages from Telegram channels. It is designed for users who need to create a local backup of a channel's history, perform data analysis, or ensure a complete, gap-free message archive. The tool can be run interactively or through command-line arguments for automation.
 
 ## Features
 
-- Fetch new messages until the latest is reached.
-- Fetch old messages as far back as possible.
-- Scan for gaps in message history.
-- Fetch messages within a specific gap.
-- List available channels.
-- Supports both CLI arguments and interactive command execution.
-- Gracefully handles interruptions and can stop ongoing fetch tasks.
-- Tracks the last fetched message per session.
+- **Fetch New Messages**: Fetches all new messages from the last fetched message up to the most recent one in the channel.
+- **Fetch Old Messages**: Fetches older messages, going backward in history from the earliest message stored locally.
+- **Gap Detection**: Scans the locally stored message history to identify any gaps (missing message IDs) in the sequence.
+- **Fill Gaps**: Fetches all messages within a specific ID range to fill identified gaps.
+- **List Channels**: Lists all channels and chats you have access to, making it easy to find the correct `CHAT_ID`.
+- **Interactive & CLI Modes**: Can be operated through an interactive command prompt or via direct CLI arguments for scripting.
+- **Graceful Interruption Handling**: Long-running fetch operations can be stopped safely without corrupting data.
+- **State Tracking**: Remembers the range of fetched messages for each channel to efficiently resume fetching.
 
 ## Installation
 
-1. Clone the repository:
+- Clone the repository:
 
    ```bash
    git clone https://github.com/yourusername/tgram.git
    cd tgram
    ```
 
-2. Install dependencies:
+- Install dependencies:
 
    ```bash
    pip install -r requirements.txt
    ```
 
-3. Set up environment variables: Create a `.env` file and add the following:
+- Set up environment variables: Create a `.env` file in the root of the project.
 
-   ```env
-   API_ID=your_api_id
-   API_HASH=your_api_hash
-   CHAT_ID=your_chat_id
-   BATCH_SIZE=100
-   OUTPUT_DIR=./output
-   ```
+## Configuration
 
-4. Run the application:
+Create a `.env` file with the following variables:
+
+```env
+# Your Telegram API credentials from my.telegram.org
+API_ID=your_api_id
+API_HASH=your_api_hash
+
+# The ID of the default Telegram channel/chat to fetch from.
+# You can find other IDs using the `list_chan` command.
+CHAT_ID=your_chat_id
+
+# Number of messages to fetch per API request.
+BATCH_SIZE=100
+
+# Directory to save the fetched message data.
+OUTPUT_DIR=./output
+```
+
+- Run the application:
 
    ```bash
    python main.py
@@ -50,35 +62,44 @@ This application fetches messages from a specified Telegram channel and supports
 
 ### Interactive Mode
 
-After running `python main.py`, the program waits for commands. Available commands:
+Run `python main.py` to start the interactive shell. You can then type commands at the prompt.
 
-- `fetch_new` - Fetches new messages until the latest is reached.
-- `fetch_old` - Fetches old messages as far back as possible.
-- `fetch_scan` - Scans for gaps in message history and outputs missing message ranges.
-- `fetch_gap start_id end_id` - Fetches messages between `start_id` and `end_id`.
-- `list_chan` - Displays channel names and IDs.
-- `status` - Shows the status of any ongoing fetch processes.
-- `stop` - Stops the current fetch task.
-- `exit` - Gracefully stops ongoing tasks and exits the program.
+- `fetch_new`: Fetches messages with IDs greater than the highest ID stored locally for the current channel.
+- `fetch_old`: Fetches messages with IDs lower than the lowest ID stored locally.
+- `fetch_scan`: Scans the stored message database for the current channel and reports any ranges of missing message IDs.
+- `fetch_gap <start_id> <end_id>`: Fetches all messages within the specified ID range. This is useful for filling gaps found by `fetch_scan`.
+- `list_chan`: Displays the names and IDs of all your chats and channels.
+- `status`: Shows whether a fetch operation is currently in progress.
+- `exit`: Exits the application.
 
 ### CLI Mode
 
-Commands can also be executed directly via the command line:
+You can execute commands directly from your terminal for scripting or single-shot operations.
 
 ```bash
+# Fetch new messages for the default CHAT_ID
 python main.py fetch_new
+
+# Fetch old messages
 python main.py fetch_old
+
+# Scan for gaps in message history
 python main.py fetch_scan
+
+# Fetch messages in a specific range
 python main.py fetch_gap 1000 2000
+
+# List available channels and chats
 python main.py list_chan
 ```
 
 ## Graceful Handling of Interruptions
 
-- The program tracks the last fetched message to allow resumption.
-- Fetch operations execute sequentially, ensuring consistency.
-- The `stop` command stops an ongoing fetch process.
-- The `exit` command terminates the program without requiring confirmation.
+The application is designed to handle interruptions safely:
+
+- **Stateful Resumption**: The application keeps track of the message ID ranges that have been successfully fetched for each channel. This allows `fetch_new` and `fetch_old` to resume exactly where they left off.
+- **Sequential Operations**: Fetch requests are queued and executed one at a time to prevent conflicts and ensure data integrity.
+- **Clean Exit**: The `exit` command ensures any running tasks are stopped before the program terminates.
 
 ## Contributing
 
@@ -87,4 +108,3 @@ Pull requests are welcome! For major changes, please open an issue first to disc
 ## License
 
 MIT License
-

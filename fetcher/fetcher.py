@@ -126,16 +126,17 @@ class TelegramFetcher(Fetcher):
         async for message in self.app.get_chat_history(**fetch_kwargs):
             yield message
 
-    def show_status(self):
-        if self.active_task:
-            print("A fetch operation is currently running.")
-        else:
-            print("No active fetch operations.")
-
-    async def stop_current_task(self):
-        if self.active_task:
-            print("Stopping the active fetch operation...")
-            self.active_task.cancel()
-            self.active_task = None
-        else:
-            print("No fetch operation is currently running.")
+    def _process_message(self, message):
+        """Process and store a single message."""
+        message_data = {
+            "id": message.id,
+            "from_user": {
+                "id": message.from_user.id if message.from_user else None,
+                "username": message.from_user.username if message.from_user else None
+            },
+            "date": message.date.strftime("%Y-%m-%dT%H:%M:%S") if message.date else None,
+            "text": message.text,
+            "media": str(message.media) if message.media else None,
+            "reply_to_message_id": message.reply_to_message_id
+        }
+        self.storage.save_message(message.id, message_data)

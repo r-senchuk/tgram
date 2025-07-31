@@ -1,5 +1,7 @@
 messages_-1001593560584
+my_session.session
 sessions
 .env
 pub.key
 .DS_Store
+output/
