@@ -68,10 +68,12 @@ class TelegramFetcher(Fetcher):
         # ``TypeError`` when arithmetic is performed.  Convert keys to integers
         # before computing the smallest ID.
         all_messages = self.storage.load_all_messages().keys()
-        last_stored_message = min((int(k) for k in all_messages), default=None)
+        last_stored_message = min(
+            map(int, self.storage.load_all_messages().keys()), default=None
+        )
         fetch_kwargs = {"chat_id": self.chat_id, "limit": self.batch_size}
 
-        if last_stored_message:
+        if last_stored_message is not None:
             fetch_kwargs["offset_id"] = last_stored_message - 1
 
         while True:
