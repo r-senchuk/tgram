@@ -139,6 +139,25 @@ class TelegramFetcher(Fetcher):
         except Exception as e:
             print(f"Error listing channels: {e}")
 
+    def show_status(self):
+        """Display basic information about stored messages."""
+        all_messages = self.storage.load_all_messages()
+        total = len(all_messages)
+        if total == 0:
+            print("No messages stored.")
+            return
+
+        ids = list(map(int, all_messages.keys()))
+        first_id, last_id = min(ids), max(ids)
+        print(f"Stored messages: {total}")
+        print(f"ID range: {first_id} - {last_id}")
+
+        gaps = self.storage.find_gaps()
+        if gaps:
+            print(f"Gaps detected: {gaps}")
+        else:
+            print("No gaps detected.")
+
     async def _fetch_messages(self, fetch_kwargs):
         """Helper to fetch messages for better testability."""
         history = self.app.get_chat_history(**fetch_kwargs)

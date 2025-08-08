@@ -96,7 +96,7 @@ Run `python main.py` to start the interactive shell. You can then type commands 
 - `fetch_scan`: Scans the stored message database for the current channel and reports any ranges of missing message IDs.
 - `fetch_gap <start_id> <end_id>`: Fetches all messages within the specified ID range. This is useful for filling gaps found by `fetch_scan`.
 - `list_chan`: Displays the names and IDs of all your chats and channels.
-- `status`: Shows whether a fetch operation is currently in progress.
+- `status`: Shows a summary of stored messages and any gaps detected.
 - `exit`: Exits the application.
 
 ### CLI Mode
@@ -118,6 +118,9 @@ python main.py fetch_gap 1000 2000
 
 # List available channels and chats
 python main.py list_chan
+
+# Show stored message statistics
+python main.py status
 ```
 
 ## Graceful Handling of Interruptions
