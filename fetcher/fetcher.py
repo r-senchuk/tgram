@@ -70,10 +70,12 @@ class TelegramFetcher(Fetcher):
     async def fetch_old(self):
         """Fetch the oldest messages and store them."""
         print(f"Starting to fetch oldest messages for chat {self.chat_id}...")
-        last_stored_message = min(self.storage.load_all_messages().keys(), default=None)
+        last_stored_message = min(
+            map(int, self.storage.load_all_messages().keys()), default=None
+        )
         fetch_kwargs = {"chat_id": self.chat_id, "limit": self.batch_size}
 
-        if last_stored_message:
+        if last_stored_message is not None:
             fetch_kwargs["offset_id"] = last_stored_message - 1
 
         while True:
