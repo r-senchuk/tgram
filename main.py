@@ -24,7 +24,7 @@ def print_help():
     print("  fetch_scan (fs)  - Scan for missing messages")
     print("  fetch_gap (fg) <start_id> <end_id> - Fetch specific gap")
     print("  list_chan (lc)   - List available channels")
-    print("  status (st)      - Show status of ongoing tasks")
+    print("  status (st)      - Show stored message statistics")
     print("  exit (q, quit)   - Exit application")
 
 def parse_command(raw_cmd):
