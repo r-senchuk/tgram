@@ -15,6 +15,33 @@ This application provides a robust command-line interface (CLI) for fetching and
 - **Graceful Interruption Handling**: Long-running fetch operations can be stopped safely without corrupting data.
 - **State Tracking**: Remembers the range of fetched messages for each channel to efficiently resume fetching.
 
+## Project Structure
+
+- `main.py`: Entry point providing both an interactive shell and direct CLI commands.
+- `config.py`: Loads required environment variables and ensures output directories exist.
+- `fetch_messages.py`: Standalone example script demonstrating lower-level message fetching.
+- `fetcher/`
+  - `fetcher.py`: Implements the `TelegramFetcher` class and fetcher interface.
+  - `storage.py` / `storage_file.py`: Define the storage abstraction and JSON-backed implementation.
+  - `channels.py`: Utilities for listing available channels and groups.
+  - `utils.py`: Helper functions for JSON I/O, logging, ID-range checks, and environment loading.
+- `tests/`
+  - `test_fetcher.py` and `test_storage.py`: Unit tests covering fetch logic and file-based storage.
+
+## Key Concepts
+
+- Built on top of the asynchronous Pyrogram client for Telegram.
+- Swappable storage backends via the `KeyValueStorage` interface; the default `FileKeyValueStorage` persists data to JSON.
+- Multiple fetching modes (`fetch_new`, `fetch_old`, `fetch_scan`, `fetch_gap`, and `list_chan`) to archive messages and detect gaps.
+- Commands are available through an interactive prompt or direct CLI invocation.
+
+## Tips for New Contributors
+
+1. Create a `.env` file with your Telegram API credentials, default `CHAT_ID`, `BATCH_SIZE`, and `OUTPUT_DIR`.
+2. Review `fetcher/fetcher.py` to understand how messages are retrieved and stored asynchronously.
+3. Run the unit tests with `python -m pytest` to ensure everything works after changes.
+4. Check out `fetch_messages.py` for a lower-level example of message processing and consult the [Pyrogram documentation](https://docs.pyrogram.org/) to explore the broader API.
+
 ## Installation
 
 - Clone the repository:
@@ -69,7 +96,7 @@ Run `python main.py` to start the interactive shell. You can then type commands 
 - `fetch_scan`: Scans the stored message database for the current channel and reports any ranges of missing message IDs.
 - `fetch_gap <start_id> <end_id>`: Fetches all messages within the specified ID range. This is useful for filling gaps found by `fetch_scan`.
 - `list_chan`: Displays the names and IDs of all your chats and channels.
-- `status`: Shows whether a fetch operation is currently in progress.
+- `status`: Shows a summary of stored messages and any gaps detected.
 - `exit`: Exits the application.
 
 ### CLI Mode
@@ -91,6 +118,9 @@ python main.py fetch_gap 1000 2000
 
 # List available channels and chats
 python main.py list_chan
+
+# Show stored message statistics
+python main.py status
 ```
 
 ## Graceful Handling of Interruptions

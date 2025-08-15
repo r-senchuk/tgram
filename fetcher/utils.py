@@ -1,7 +1,16 @@
 import json
 import logging
-from os import getenv
-from dotenv import load_dotenv
+
+# ``python-dotenv`` is an optional dependency used for loading environment
+# variables from a ``.env`` file.  Importing it unconditionally causes the
+# package to be required even when the functionality is not needed (e.g. in
+# tests).  This resulted in a ``ModuleNotFoundError`` during test collection
+# when the dependency was not installed.  Import lazily and degrade
+# gracefully when it is absent so the rest of the utilities remain usable.
+try:  # pragma: no cover - the import either succeeds or we handle the failure
+    from dotenv import load_dotenv  # type: ignore
+except Exception:  # ModuleNotFoundError in most cases
+    load_dotenv = None
 
 # JSON File Utilities
 def load_json(file_path):
@@ -60,5 +69,17 @@ def is_async_iterable(obj):
 
 # Environment Loader
 def load_env():
-    """Load environment variables from a .env file."""
+    """Load environment variables from a .env file if available.
+
+    The helper should not raise an exception when ``python-dotenv`` is not
+    installed.  Instead, a warning is logged and the call becomes a no-op.
+    This keeps the rest of the application functional in environments where
+    loading a ``.env`` file is optional.
+    """
+    if load_dotenv is None:
+        logging.getLogger(__name__).warning(
+            "python-dotenv is not installed; skipping .env loading"
+        )
+        return
+
     load_dotenv()
