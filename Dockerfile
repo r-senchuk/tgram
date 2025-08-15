@@ -27,5 +27,6 @@ COPY . .
 # Make main.py executable
 RUN chmod +x main.py
 
-# Set main.py as default entrypoint
+# Set main.py as default entrypoint with flexible command handling
 ENTRYPOINT ["python", "main.py"]
+CMD []

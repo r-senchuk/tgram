@@ -24,8 +24,6 @@ services:
       - .env
     stdin_open: true
     tty: true
-    # Allow interactive CLI usage
-    command: ["python", "main.py"]
 
 volumes:
   tgram_data:
