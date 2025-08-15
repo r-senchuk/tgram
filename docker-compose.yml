@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  tgram:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tgram-cli
+    volumes:
+      # Mount project directory for development (changes reflected without rebuild)
+      - .:/app
+      # Named volume for SQLite database persistence
+      - tgram_data:/app/data
+      # Mount sessions directory for Telegram session persistence
+      - ./sessions:/app/sessions
+    environment:
+      # Default environment variables (can be overridden by .env file)
+      - API_ID=${API_ID}
+      - API_HASH=${API_HASH}
+      - CHAT_ID=${CHAT_ID}
+      - BATCH_SIZE=${BATCH_SIZE:-20}
+      - OUTPUT_DIR=/app/data
+    env_file:
+      - .env
+    stdin_open: true
+    tty: true
+    # Allow interactive CLI usage
+    command: ["python", "main.py"]
+
+volumes:
+  tgram_data:
+    driver: local
