@@ -59,4 +59,5 @@ docker-compose.yml
 
 # Session files (will be mounted as volume)
 my_session.session
+my_session.session-journal
 sessions/

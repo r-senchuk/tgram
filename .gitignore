@@ -1,8 +1,19 @@
-messages_-1001593560584
-my_session.session
-my_session.session-journal
-sessions
+# Session files
+*.session
+*.session-journal
+sessions/
+
+# Environment and keys
 .env
 pub.key
+
+# System files
 .DS_Store
-output/
+
+# Data and logs
+data/
+*.log
+
+# Temporary files
+*.tmp
+*.bak
