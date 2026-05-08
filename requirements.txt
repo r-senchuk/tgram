@@ -1,12 +1,2 @@
-# Telegram client library
-pyrogram>=2.0.0
-tgcrypto>=1.2.0
-
-# Environment variables
+telethon>=1.36.0
 python-dotenv>=1.0.0
-
-# Async support
-asyncio-mqtt>=0.16.0
-
-# Optional: For better performance
-uvloop>=0.17.0

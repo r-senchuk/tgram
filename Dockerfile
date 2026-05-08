@@ -24,9 +24,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files
 COPY . .
 
-# Make main.py executable
-RUN chmod +x main.py
-
-# Set main.py as default entrypoint with flexible command handling
-ENTRYPOINT ["python", "main.py"]
-CMD []
+CMD ["python", "-m", "tgram"]

@@ -266,6 +266,17 @@ The application is designed to handle interruptions safely:
 - **Sequential Operations**: Fetch requests are queued and executed one at a time to prevent conflicts and ensure data integrity.
 - **Clean Exit**: The `exit` command ensures any running tasks are stopped before the program terminates.
 
+## Roadmap
+
+This project is being rewritten from scratch on a modern stack (Telethon, SQLite FTS5 + sqlite-vec, LiteLLM, Gradio) to add multi-channel ingest, full-text + semantic search, and AI-powered Q&A grounded in real chat history.
+
+The work is broken into self-contained phases that any AI agent can implement independently. See **[`plans/README.md`](plans/README.md)** for the locked-in tool stack, target architecture, and phase index:
+
+- [Phase 1 — Bootstrap](plans/PHASE_1_bootstrap.md): fresh project skeleton, Telethon ingest, new schema, legacy data migration
+- [Phase 2 — Multi-channel + Daemon](plans/PHASE_2_multi_channel_daemon.md): channels table, `fetch_all`, APScheduler daemon
+- [Phase 3 — Search](plans/PHASE_3_search.md): SQLite FTS5 keyword search
+- [Phase 4 — AI Q&A](plans/PHASE_4_ai_qa.md): embeddings, hybrid retrieval, multi-LLM router, Gradio UI
+
 ## Contributing
 
 Pull requests are welcome! For major changes, please open an issue first to discuss your ideas.
