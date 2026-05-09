@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 class Config:
     api_id: int
     api_hash: str
-    default_chat_id: int
+    default_chat_id: int | None
     batch_size: int
     data_dir: Path
     db_path: Path
@@ -18,17 +18,18 @@ class Config:
     @classmethod
     def load(cls) -> "Config":
         load_dotenv()
-        for k in ("API_ID", "API_HASH", "CHAT_ID"):
+        for k in ("API_ID", "API_HASH"):
             if not os.getenv(k):
                 raise RuntimeError(f"Missing required env var: {k}")
         data_dir = Path(os.getenv("OUTPUT_DIR", "./data"))
         data_dir.mkdir(parents=True, exist_ok=True)
         sessions = data_dir / "sessions"
         sessions.mkdir(parents=True, exist_ok=True)
+        raw_chat_id = os.getenv("CHAT_ID")
         return cls(
             api_id=int(os.getenv("API_ID")),
             api_hash=os.getenv("API_HASH"),
-            default_chat_id=int(os.getenv("CHAT_ID")),
+            default_chat_id=int(raw_chat_id) if raw_chat_id else None,
             batch_size=int(os.getenv("BATCH_SIZE", "100")),
             data_dir=data_dir,
             db_path=data_dir / "messages.db",

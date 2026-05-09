@@ -57,19 +57,34 @@ class TopicRepo:
             ).fetchall()
             return [r[0] for r in rows]
 
-    def stats_for_chat(self, chat_id: int) -> list[dict]:
-        """Return topics with message count and last activity, sorted by msg_count desc."""
+    def stats_for_chat(self, chat_id: int | None) -> list[dict]:
+        """Return topics with message count and last activity, sorted by msg_count desc.
+
+        If chat_id is None, returns topics across all chats (with chat_id included).
+        """
         with self._conn() as c:
-            rows = c.execute(
-                """SELECT t.topic_id, t.title,
-                          COUNT(m.id) as msg_count,
-                          MAX(m.date) as last_active
-                   FROM topics t
-                   LEFT JOIN messages m
-                     ON m.chat_id = t.chat_id AND m.reply_to_top_message_id = t.topic_id
-                   WHERE t.chat_id = ?
-                   GROUP BY t.topic_id
-                   ORDER BY msg_count DESC""",
-                (chat_id,),
-            ).fetchall()
+            if chat_id is not None:
+                rows = c.execute(
+                    """SELECT t.chat_id, t.topic_id, t.title,
+                              COUNT(m.id) as msg_count,
+                              MAX(m.date) as last_active
+                       FROM topics t
+                       LEFT JOIN messages m
+                         ON m.chat_id = t.chat_id AND m.reply_to_top_message_id = t.topic_id
+                       WHERE t.chat_id = ?
+                       GROUP BY t.chat_id, t.topic_id
+                       ORDER BY msg_count DESC""",
+                    (chat_id,),
+                ).fetchall()
+            else:
+                rows = c.execute(
+                    """SELECT t.chat_id, t.topic_id, t.title,
+                              COUNT(m.id) as msg_count,
+                              MAX(m.date) as last_active
+                       FROM topics t
+                       LEFT JOIN messages m
+                         ON m.chat_id = t.chat_id AND m.reply_to_top_message_id = t.topic_id
+                       GROUP BY t.chat_id, t.topic_id
+                       ORDER BY msg_count DESC""",
+                ).fetchall()
             return [dict(r) for r in rows]

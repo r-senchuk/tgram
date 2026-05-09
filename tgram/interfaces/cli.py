@@ -4,6 +4,7 @@ import json
 import logging
 
 from tgram.adapters.repo_channels import ChannelRepo
+from tgram.adapters.repo_embeddings import EmbeddingRepo
 from tgram.adapters.repo_messages import MessageRepo
 from tgram.adapters.repo_topics import TopicRepo
 from tgram.adapters.telegram import TelegramClientAdapter
@@ -58,6 +59,27 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Show N messages before and after each hit")
 
     sub.add_parser("rebuild_fts", help="Rebuild the full-text search index from scratch")
+
+    ea = sub.add_parser("embed_all", help="Generate semantic embeddings for all stored messages")
+    ea.add_argument("--chat",  type=int, default=None)
+    ea.add_argument("--batch", type=int, default=100, help="Messages per embedding batch")
+
+    # ── AI Q&A ────────────────────────────────────────────────────────────────
+    wb = sub.add_parser("web", help="Launch Gradio chat UI in browser")
+    wb.add_argument("--chat",   type=int, default=None)
+    wb.add_argument("--port",   type=int, default=7860)
+    wb.add_argument("--think",  action="store_true", help="Enable Qwen chain-of-thought")
+
+    ak = sub.add_parser("ask", help="Ask a question answered from the archive using Ollama")
+    ak.add_argument("question")
+    ak.add_argument("--chat",      type=int, default=None)
+    ak.add_argument("--topic",     type=int, default=None)
+    ak.add_argument("--limit",     type=int, default=30,
+                    help="Number of messages to retrieve as context")
+    ak.add_argument("--no-think",  action="store_true",
+                    help="Disable Qwen3 chain-of-thought (faster, less verbose)")
+    ak.add_argument("--no-stream", action="store_true",
+                    help="Print full answer at once instead of streaming")
 
     # ── multi-channel commands ─────────────────────────────────────────────────
     ch_p = sub.add_parser("channels", help="Manage tracked channels")
@@ -117,6 +139,14 @@ async def run(args) -> int:
     repo        = MessageRepo(cfg.db_path)
     repo_topics = TopicRepo(cfg.db_path)
     repo_chan   = ChannelRepo(cfg.db_path)
+    repo_embed  = EmbeddingRepo(cfg.db_path)
+
+    if args.cmd == "embed_all":
+        from tgram.adapters.llm_ollama import OllamaAdapter
+        from tgram.services.embed import EmbedService
+        svc_embed = EmbedService(OllamaAdapter(), repo_embed)
+        svc_embed.backfill(chat_id=args.chat, batch_size=args.batch)
+        return 0
 
     if args.cmd == "search":
         from tgram.adapters.search_fts import FTSSearch
@@ -166,6 +196,42 @@ async def run(args) -> int:
         print("Rebuilding FTS index… ", end="", flush=True)
         count = FTSSearch(cfg.db_path).rebuild()
         print(f"{count:,} rows indexed.")
+        return 0
+
+    if args.cmd == "web":
+        from tgram.interfaces.web import launch
+        launch(cfg, chat_id=args.chat,
+               think=args.think, port=args.port)
+        return 0
+
+    if args.cmd == "ask":
+        from tgram.adapters.llm_ollama import OllamaAdapter
+        from tgram.adapters.search_fts import FTSSearch
+        from tgram.services.ai import AIService
+
+        ollama = OllamaAdapter()
+        fts_ask = FTSSearch(cfg.db_path, embedding_repo=repo_embed)
+        ai = AIService(fts_ask, ollama)
+        stream = not getattr(args, "no_stream", False)
+        think  = not getattr(args, "no_think",  False)
+
+        response, hits = ai.ask(
+            args.question,
+            chat_id=args.chat,
+            topic_id=args.topic,
+            limit=args.limit,
+            stream=stream,
+            think=think,
+        )
+        print(f"(retrieved {len(hits)} messages as context)\n")
+        if stream:
+            for chunk in response:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    print(delta, end="", flush=True)
+            print()
+        else:
+            print(response)
         return 0
 
     if args.cmd == "fetch_scan":

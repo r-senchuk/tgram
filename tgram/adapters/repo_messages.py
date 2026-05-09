@@ -98,6 +98,20 @@ class MessageRepo:
                 "SELECT COUNT(*) FROM messages WHERE chat_id=?", (chat_id,)
             ).fetchone()[0]
 
+    def get_by_id(self, message_id: int, chat_id: int | None = None) -> dict | None:
+        """Return the first message row matching message_id, optionally scoped to chat_id."""
+        sql = """SELECT id, chat_id, date, text, username, from_user_id,
+                        reply_to_top_message_id, virtual_topic_id
+                 FROM messages WHERE id = ?"""
+        params: list = [message_id]
+        if chat_id is not None:
+            sql += " AND chat_id = ?"
+            params.append(chat_id)
+        sql += " LIMIT 1"
+        with self._conn() as c:
+            row = c.execute(sql, params).fetchone()
+        return dict(row) if row else None
+
     # ── gap detection ─────────────────────────────────────────────────────────
 
     def find_gaps(self, chat_id: int) -> list[tuple[int, int]]:
