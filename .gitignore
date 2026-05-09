@@ -12,6 +12,7 @@ pub.key
 
 # Data and logs
 data/
+*.db
 *.log
 
 # Temporary files
@@ -23,3 +24,6 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+
+# Claude Code local settings
+.claude/
