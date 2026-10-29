@@ -1,14 +1,47 @@
-# tgram — Telegram Archive + AI Q&A
+# tgram — Telegram Archive, Conversation Search & Grounded AI Q&A
 
-Personal tool that archives Telegram channels/groups you belong to, lets you search the archive, and answers questions grounded in real chat history using a local or cloud LLM.
+Personal local-first tool that archives Telegram channels, supergroups, and forum groups you belong to into a single SQLite database (`data/messages.db`), reconstructs multi-message reply chains and conversation threads, provides hybrid semantic + keyword search, and answers questions grounded in real chat discussions with clickable `[msg:ID]` citations.
+
+---
+
+## Key Capabilities
+
+- **Causal, Gap-Free Telegram Ingest:** Fetches messages via Telethon (`reverse=True` oldest-first on `fetch_new`), preserves full `raw_json` alongside normalized columns, and resolves multi-hop reply chains (`virtual_topic_id`) automatically after every fetch (~0.5s pass).
+- **Reproducible Conversation Flows:** Reconstructs human conversations around any hit by combining the explicit reply chain (thread root + ancestor path + hit + direct replies) with a time-bounded temporal window (`±2` adjacent messages in the same topic within 30 minutes).
+- **Hybrid Semantic + Keyword Search:** Combines SQLite FTS5 (`unicode61` BM25) and `sqlite-vec` cosine similarity (`nomic-embed-text-v2-moe:latest`, 768-dim) via Reciprocal Rank Fusion (`k=60`). Automatically falls back to FTS-only when phrase/prefix operators (`"phrase"`, `term*`) are used, when `--fts-only` is passed, or when Ollama is offline.
+- **Thread-Grounded AI Q&A (CLI & Gradio Web UI):** Feeds deduplicated chronological conversation threads (`--- [topic] YYYY-MM-DD ---` with `↳` reply indicators) to local Ollama (`gemma4:26b` with `num_ctx=12288`, 12k char budget) or cloud LLMs via LiteLLM (`gemini-2.5-flash-lite`, Claude, GPT-4o, 24k char budget).
+
+---
+
+## Architecture Overview
+
+Imports flow strictly downward across layers:
+
+```text
+tgram/
+├── interfaces/     cli.py, daemon.py, web.py        — CLI commands, polling daemon, Gradio UI
+├── services/       ingest.py, search.py,            — Use-case orchestration (no direct SQL/network I/O)
+│                   ai.py, embed.py
+├── adapters/       telegram.py, repo_messages.py,   — Telethon, SQLite, FTS5, sqlite-vec,
+│                   repo_channels.py, repo_topics.py,  Ollama & LiteLLM adapters
+│                   repo_embeddings.py, search_fts.py,
+│                   llm_ollama.py, llm_litellm.py
+├── domain/         message.py, channel.py,          — Frozen dataclasses & pure thread resolution
+│                   topic.py, threading.py
+└── migrations/     001_*.sql … 005_*.sql            — SQLite schema, FTS5 triggers, chunked vectors
+```
+
+See [docs/architecture_and_data_flow.md](docs/architecture_and_data_flow.md) for the complete data flow and schema reference.
+
+---
 
 ## Setup
 
 ```bash
 git clone https://github.com/r-senchuk/tgram.git
 cd tgram
-python -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp env.template .env   # fill in API_ID, API_HASH from my.telegram.org
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
+cp env.template .env   # fill in API_ID, API_HASH from https://my.telegram.org
 ```
 
 ## Configuration (`.env`)
@@ -22,187 +55,209 @@ CHAT_ID=-1001234567890      # default channel — used by `make` targets and --c
 FETCH_INTERVAL_MINUTES=5
 REFRESH_DIALOGS_MINUTES=60
 
-# API keys for cloud models in the web UI (only the ones you want to use)
+# API keys for cloud models in the web UI / LiteLLM (only the ones you use)
 GEMINI_API_KEY=...
 ANTHROPIC_API_KEY=...
 OPENAI_API_KEY=...
 ```
 
-## Makefile shortcuts
+---
 
-All common commands have `make` targets that use `CHAT_ID` from `.env` by default. Override with `CHAT=`:
+## Makefile Shortcuts
+
+Common workflows have `make` targets that use `CHAT_ID` from `.env` for single-chat operations and search across **all** chats when `CHAT=` is omitted:
 
 ```bash
 make daemon                          # start background fetcher
-make fetch-new                       # fetch new messages for default chat
+make fetch-new                       # fetch new messages for default chat (oldest-first)
 make fetch-new CHAT=-1001593560584   # override chat
 
-make search Q="карта резидента"
-make ask Q="how do I open a company in Poland"
+make repair-threads                  # recompute virtual_topic_id reply chains
+make thread ID=150235                # reconstruct conversation around message ID
 
-make embed                           # generate embeddings for default chat
-make web
+make search Q="карта резидента"      # hybrid semantic + FTS5 search
+make ask Q="Як відкрити JDG?"        # AI Q&A grounded in conversation threads
+
+make embed                           # generate embeddings for unembedded messages
+make web                             # launch Gradio web UI on http://localhost:7860
 ```
 
-Full command reference below if you prefer `python -m tgram <cmd>` directly.
+---
 
-## Commands
+## Command Reference
 
-### First-time authentication
+### 1. First-Time Authentication
 
 ```bash
 python -m tgram list_chan
 # Prompts for phone number + SMS code on first run.
-# Session saved — subsequent runs authenticate silently.
+# Session saved to data/sessions/tgram.session — subsequent runs authenticate silently.
 ```
 
-### Fetching messages
+### 2. Fetching Messages
+
+Messages are fetched causally (`reverse=True` oldest-first on `fetch_new`) so interrupted runs never leave gaps below `max_id`. Reply chains are resolved with `tgram.domain.threading.resolve_root`, and an authoritative `repair_virtual_topics` pass runs automatically after every fetch that saves rows.
 
 ```bash
-# Fetch messages newer than the last stored one (incremental update)
+# Fetch messages newer than the highest stored ID (oldest-first)
 python -m tgram fetch_new --chat -1001593560584
 
-# Fetch full history backwards from the oldest stored message
+# Fetch one batch of history older than the lowest stored ID
 python -m tgram fetch_old --chat -1001593560584
 
-# Fetch full history and keep going until the channel beginning
+# Keep fetching older history until the channel beginning is reached
 python -m tgram fetch_old --chat -1001593560584 --loop
 
-# Fetch a specific ID range (to fill a known gap)
+# Fetch a specific ID range (to fill a gap reported by fetch_scan)
 python -m tgram fetch_gap 100000 101000 --chat -1001593560584
 
-# Show storage stats and gap count
+# Show storage stats, ID bounds, topic counts, and gap count
 python -m tgram status --chat -1001593560584
 
-# Show all detected gaps
+# List all detected message ID gaps
 python -m tgram fetch_scan --chat -1001593560584
 ```
 
-### Multi-channel management
+### 3. Threads & Conversation Reconstruction
+
+Forum top-level posts (`reply_to_message_id == reply_to_top_message_id`) start their own conversation thread (`virtual_topic_id = id`), while nested replies inherit the root of their reply chain.
 
 ```bash
-# Discover all your Telegram channels/groups
-python -m tgram channels refresh
+# Recompute virtual_topic_id reply chains across all chats (or a specific --chat)
+python -m tgram repair_threads
+python -m tgram repair_threads --chat -1001593560584 --dry-run
+make repair-threads
 
-# List all known channels (✓ = enabled for fetch_all)
-python -m tgram channels list
-
-# Enable specific channels for automatic fetching
-python -m tgram channels enable -- -1001593560584 -1001919096489
-
-# Disable a channel
-python -m tgram channels disable -- -1001593560584
-
-# Fetch new messages for all enabled channels at once
-python -m tgram fetch_all
+# Reconstruct and display the conversation around a specific message ID
+# Includes: thread root, ancestor chain, the target message (>>>), direct replies,
+# and ±window temporal neighbours in the same topic within 30 minutes
+python -m tgram thread 150235
+python -m tgram thread 150235 --chat -1001593560584 --window 2
+make thread ID=150235
 ```
 
-### Daemon (background auto-fetch)
+### 4. Multi-Channel Management & Background Daemon
 
 ```bash
-# Keeps all enabled channels up to date automatically
-# Fetches every FETCH_INTERVAL_MINUTES (default: 5)
-# Ctrl+C to stop cleanly
+# Sync all your Telegram dialogs into the channels table (new channels default to disabled)
+python -m tgram channels refresh
+
+# List all known channels (✓ = enabled for fetch_all / daemon)
+python -m tgram channels list
+
+# Enable or disable channels for automatic fetching
+python -m tgram channels enable -- -1001593560584 -1001919096489
+python -m tgram channels disable -- -1001593560584
+
+# Fetch new messages + sync topic names across all enabled channels
+python -m tgram fetch_all
+
+# Run continuous background daemon (polls every FETCH_INTERVAL_MINUTES)
 python -m tgram daemon
 ```
 
-### Topics (forum channels)
+### 5. Forum Topics
 
 ```bash
-# Fetch topic names from Telegram and store them
+# Fetch human-readable topic titles from Telegram for unknown topic IDs
 python -m tgram sync_topics --chat -1001593560584
 
-# List all topics with message counts
+# List all forum topics sorted by message count and last activity
 python -m tgram list_topics --chat -1001593560584
 ```
 
-### Search
+### 6. Hybrid Semantic & Full-Text Search
+
+`search` defaults to **hybrid mode** (FTS5 BM25 + `sqlite-vec` cosine similarity merged via Reciprocal Rank Fusion) and prints the active mode (`mode: hybrid`, `mode: fts`, `mode: fts (operators)`, or `mode: fts (ollama unreachable)`) to `stderr`.
 
 ```bash
-# Full-text search across all messages (run once first to build index)
-python -m tgram rebuild_fts
-
-# Basic search
+# Hybrid search (default)
 python -m tgram search "карта резидента"
 
-# Filter by channel or topic
-python -m tgram search "JDG" --chat -1001593560584
-python -m tgram search "квартира" --topic 10776
+# Reconstruct conversation threads around each search hit
+python -m tgram search "карта резидента" --context 2
 
-# Filter by date
-python -m tgram search "податки" --since 2026-01-01
+# Keyword-only FTS5 search (skips Ollama embedding)
+python -m tgram search "карта резидента" --fts-only
 
-# Show surrounding conversation (N messages before/after each hit)
-python -m tgram search "карта резидента" --context 3
+# Filter by channel, forum topic, or date range (applies to both FTS and vector search)
+python -m tgram search "податки" --chat -1001593560584 --topic 3302 --since 2025-01-01
 
-# Prefix and phrase search (FTS5 syntax)
+# Phrase and prefix queries (automatically switch to `mode: fts (operators)`)
 python -m tgram search "легаліз*"
 python -m tgram search '"карта побиту"'
+
+# Rebuild FTS5 index from scratch if needed
+python -m tgram rebuild_fts
 ```
 
-### Semantic embeddings
+### 7. Semantic Embeddings
 
-Requires Ollama with `nomic-embed-text-v2-moe:latest` pulled. Enables hybrid search (keywords + semantic meaning) for the `ask` command and web UI.
-
-Long messages are automatically split into overlapping 400-char chunks (safe for the model's 512-token context window). The process is idempotent — safe to interrupt and resume.
+Requires Ollama running locally with `nomic-embed-text-v2-moe:latest`. Long messages are split into overlapping 400-character chunks (`_OVERLAP=50`) with the `search_document: ` prefix. Safe to interrupt and resume or run alongside `make daemon`.
 
 ```bash
-# Generate embeddings for all stored messages
-python -m tgram embed_all --chat -1001593560584
-
-# Run concurrently with daemon — WAL mode prevents locking conflicts
-make embed &
-make daemon
+# Generate embeddings for all unembedded messages (all chats or specific --chat)
+python -m tgram embed_all
+python -m tgram embed_all --chat -1001593560584 --batch 100
+make embed
 ```
 
-After embeddings are built, `ask` and `web` automatically use hybrid retrieval (FTS5 BM25 + vector cosine via RRF) when Qwen is selected.
+### 8. AI Q&A (`ask`) & Gradio Web UI (`web`)
 
-### AI Q&A
+Retrieves relevant messages via hybrid search, expands top hits into deduplicated chronological conversation threads (`--- [topic] YYYY-MM-DD ---`), and streams grounded answers with `[msg:<id>]` citations.
 
-Requires Ollama with `qwen3.6:35b-a3b-q4_k_m` pulled for the CLI `ask` command.
+- **Local Ollama (`gemma4:26b`)**: `12,000` char context budget with `num_ctx=12288`.
+- **Cloud Models (`LiteLLMAdapter`)**: `24,000` char context budget.
 
 ```bash
-# Ask a question — answered from real chat messages
+# Ask a question from the CLI
 python -m tgram ask "Що таке карта сталого побуту?"
-
-# Focus on a specific topic
-python -m tgram ask "Як відкрити JDG?" --topic 3302
-
-# Filter by channel
-python -m tgram ask "Where can I rent an apartment?" --chat -1001593560584
-
-# Suppress chain-of-thought for faster answers
+python -m tgram ask "Як відкрити JDG?" --topic 3302 --chat -1001593560584
 python -m tgram ask "Яка різниця між статусом та резидентом?" --no-think
 
-# Print full answer at once (no streaming)
-python -m tgram ask "summary of legalization discussions" --no-stream
+# Launch the Gradio Web UI (http://localhost:7860)
+# Clicking any [↗ msg:N] badge opens the full reconstructed conversation thread
+python -m tgram web
+python -m tgram web --chat -1001593560584 --port 7860
 ```
 
-Answers include `[msg:XXXXXX]` citations. Verify any citation:
-```bash
-sqlite3 data/messages.db "SELECT date, username, text FROM messages WHERE id = XXXXXX;"
-```
-
-### Web UI (Gradio)
-
-Chat interface with model selector, topic filter, and streaming responses. Opens at `http://localhost:7860`.
-
-Available models: Gemma 3 27B (default), Gemini 2.5 Flash Lite, Gemini 2.5 Flash, Qwen 35B (local), Claude Sonnet, GPT-4o. Cloud models require the corresponding `*_API_KEY` in `.env`.
+### 9. Running Tests
 
 ```bash
-python -m tgram web --chat -1001593560584
+.venv/bin/python -m pytest -v
 ```
+
+---
+
+## Documentation (`docs/` & `plans/`)
+
+Detailed architecture, benchmarks, and strategic roadmaps are maintained in the [`docs/`](docs/) and [`plans/`](plans/) directories:
+
+### Architecture, Metrics & Strategy (`docs/`)
+- **[Architecture, Threading & Hybrid Retrieval Data Flow](docs/architecture_and_data_flow.md)** — Layered design, SQLite schema, Telethon forum vs. reply semantics, `resolve_root` & `repair_virtual_topics`, `get_conversation` priority algorithm, and hybrid RRF search.
+- **[Database Verification & Production Archive Metrics](docs/database_verification_and_metrics.md)** — Live benchmarks on 321k+ messages and 290k+ embeddings, per-chat thread distributions, SQL integrity invariants, and query latency measurements.
+- **[Development Strategy, Enhancements & Stability Roadmap](docs/development_strategy_and_roadmap.md)** — Next phases (auto-embedding daemon, thread-contextual embeddings, cross-encoder reranking, FastMCP server), library replacement trade-offs (`sqlite-vec` vs. LanceDB, `flashrank`, `semchunk`), and SQLite/Telethon hardening.
+
+### Historical & Phase Design Docs (`docs/` & `plans/`)
+- [Phase 1: Bootstrap](plans/PHASE_1_bootstrap.md) · [Phase 2: Multi-Channel Daemon](plans/PHASE_2_multi_channel_daemon.md) · [Phase 3: FTS5 Search](plans/PHASE_3_search.md) · [Phase 4: AI Q&A](plans/PHASE_4_ai_qa.md)
+- Legacy notes: [Telegram Pipeline Overview](docs/telegram_pipeline_overview.md) · [Topic Functionality](docs/topic_functionality_implementation.md) · [Storage Requirements](docs/storage_requirements_and_implementation.md)
+
+---
 
 ## Roadmap
 
-| Phase | Status |
-|---|---|
-| 1 — Bootstrap (Telethon, schema, ingest) | ✅ Done |
-| 2 — Multi-channel + Daemon | ✅ Done |
-| 3 — FTS5 Search | ✅ Done |
-| 4a — AI Q&A via Ollama + LiteLLM | ✅ Done |
-| 4b — Gradio web UI + multi-turn chat | ✅ Done |
-| 4c — Semantic embeddings + hybrid retrieval | ✅ Done |
+| Phase | Description | Status |
+|---|---|---|
+| **1 — Bootstrap** | Telethon adapter, SQLite schema, incremental & backfill ingest | ✅ Done |
+| **2 — Multi-Channel + Daemon** | Channel management (`channels`), topic sync, background polling daemon | ✅ Done |
+| **3 — FTS5 Search** | `messages_fts` (`unicode61`), sync triggers, BM25 ranking | ✅ Done |
+| **4a — AI Q&A** | Grounded RAG with `[msg:ID]` citations via Ollama & LiteLLM | ✅ Done |
+| **4b — Gradio Web UI** | Multi-turn chat, dark/light glass theme, clickable citation context | ✅ Done |
+| **4c — Semantic Embeddings** | Chunked 768-dim vectors (`sqlite-vec`) + Reciprocal Rank Fusion | ✅ Done |
+| **5 — Causal Threading & Conversations** | Oldest-first `fetch_new`, 206.8k thread repair, `get_conversation`, filtered hybrid search | ✅ Done |
+| **6 — Autonomous Daemon & Hardening** | Incremental auto-embed in daemon, SQLite pragma factory, session file lock | 📋 Planned ([Strategy](docs/development_strategy_and_roadmap.md)) |
+| **7 — Thread Embeddings & Reranking** | Thread-contextual embeddings, `flashrank` cross-encoder, multi-turn query rewriting | 📋 Planned ([Strategy](docs/development_strategy_and_roadmap.md)) |
+| **8 — MCP Server & Knowledge Distillation** | `FastMCP` server for AI assistants + automated per-topic FAQ distillation | 📋 Planned ([Strategy](docs/development_strategy_and_roadmap.md)) |
 
 ## License
 

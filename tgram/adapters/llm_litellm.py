@@ -42,9 +42,15 @@ def _fake_stream(content: str):
     yield _Chunk(content)
 
 
+CONTEXT_CHARS = 24_000
+
+
 class LiteLLMAdapter:
+    context_chars: int = CONTEXT_CHARS
+
     def __init__(self, default_model: str = DEFAULT_MODEL):
         self.default_model = default_model
+        self.context_chars = CONTEXT_CHARS
 
     def chat(self, messages: list[dict], *,
              model: str | None = None,

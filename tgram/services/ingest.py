@@ -6,6 +6,7 @@ from tgram.adapters.repo_topics import TopicRepo
 from tgram.adapters.telegram import TelegramClientAdapter
 from tgram.domain.channel import Channel
 from tgram.domain.message import Message
+from tgram.domain.threading import is_thread_start, resolve_root
 from tgram.domain.topic import Topic
 
 logger = logging.getLogger(__name__)
@@ -23,27 +24,35 @@ class IngestService:
         """Fetch messages newer than the highest stored ID. Returns count saved."""
         since = self.repo.max_id(chat_id) or 0
         logger.info(f"fetch_new chat={chat_id} since_id={since}")
-        return await self._stream_and_save(
-            self.tg.iter_history(chat_id, min_id=since), chat_id
+        saved = await self._stream_and_save(
+            self.tg.iter_history(chat_id, min_id=since, reverse=True), chat_id
         )
+        if saved > 0:
+            self.repo.repair_virtual_topics(chat_id)
+        return saved
 
-    async def fetch_old(self, chat_id: int, limit: int | None = None) -> int:
+    async def fetch_old(self, chat_id: int, limit: int | None = None, *, _repair: bool = True) -> int:
         """Fetch one batch of messages older than the lowest stored ID."""
         oldest = self.repo.min_id(chat_id) or 0
         logger.info(f"fetch_old chat={chat_id} before_id={oldest}")
-        return await self._stream_and_save(
+        saved = await self._stream_and_save(
             self.tg.iter_history(chat_id, max_id=oldest, limit=limit), chat_id
         )
+        if saved > 0 and _repair:
+            self.repo.repair_virtual_topics(chat_id)
+        return saved
 
     async def fetch_old_loop(self, chat_id: int) -> int:
         """Keep fetching older messages until the channel beginning is reached."""
         total = 0
         while True:
-            n = await self.fetch_old(chat_id)
+            n = await self.fetch_old(chat_id, _repair=False)
             total += n
             if n == 0:
                 logger.info(f"fetch_old_loop done — {total} total messages saved")
                 break
+        if total > 0:
+            self.repo.repair_virtual_topics(chat_id)
         return total
 
     async def fetch_gap(self, chat_id: int, start_id: int, end_id: int) -> int:
@@ -53,36 +62,54 @@ class IngestService:
         logger.info(f"fetch_gap chat={chat_id} range={start_id}-{end_id}")
         saved = 0
         CHUNK = 100  # Telethon limit for get_messages with id list
+        batch_roots: dict[int, int] = {}
         for chunk_start in range(start_id, end_id + 1, CHUNK):
             ids = list(range(chunk_start, min(chunk_start + CHUNK, end_id + 1)))
+            fetched = await self.tg.get_messages_by_ids(chat_id, ids)
+            if not fetched:
+                continue
+            existing = self.repo.existing_ids(chat_id, [m.id for m in fetched])
             msgs = []
-            for msg in await self.tg.get_messages_by_ids(chat_id, ids):
-                if self.repo.exists(chat_id, msg.id):
+            for msg in fetched:
+                if msg.id in existing:
                     continue
-                self._set_virtual_topic(msg)
+                self._set_virtual_topic(msg, batch_roots)
                 msgs.append(msg)
             if msgs:
                 self.repo.save_many(msgs)
                 saved += len(msgs)
+        if saved > 0:
+            self.repo.repair_virtual_topics(chat_id)
         return saved
 
     async def _stream_and_save(self, stream, chat_id: int) -> int:
         """Consume an async message stream, batching writes every BATCH_SIZE messages."""
         saved = 0
-        batch: list[Message] = []
+        raw_batch: list[Message] = []
+        batch_roots: dict[int, int] = {}
+
         async for msg in stream:
-            if self.repo.exists(chat_id, msg.id):
-                continue
-            self._set_virtual_topic(msg)
-            batch.append(msg)
-            if len(batch) >= BATCH_SIZE:
-                self.repo.save_many(batch)
-                saved += len(batch)
-                logger.info(f"  saved {saved} so far…")
-                batch = []
-        if batch:
-            self.repo.save_many(batch)
-            saved += len(batch)
+            raw_batch.append(msg)
+            if len(raw_batch) >= BATCH_SIZE:
+                existing = self.repo.existing_ids(chat_id, [m.id for m in raw_batch])
+                new_msgs = [m for m in raw_batch if m.id not in existing]
+                for m in new_msgs:
+                    self._set_virtual_topic(m, batch_roots)
+                if new_msgs:
+                    self.repo.save_many(new_msgs)
+                    saved += len(new_msgs)
+                    logger.info(f"  saved {saved} so far…")
+                raw_batch = []
+
+        if raw_batch:
+            existing = self.repo.existing_ids(chat_id, [m.id for m in raw_batch])
+            new_msgs = [m for m in raw_batch if m.id not in existing]
+            for m in new_msgs:
+                self._set_virtual_topic(m, batch_roots)
+            if new_msgs:
+                self.repo.save_many(new_msgs)
+                saved += len(new_msgs)
+
         return saved
 
     async def refresh_dialogs(self, repo_channels: ChannelRepo) -> int:
@@ -133,10 +160,17 @@ class IngestService:
             repo_topics.save(Topic(chat_id=chat_id, topic_id=topic_id, title=title))
         return len(names)
 
-    def _set_virtual_topic(self, msg: Message) -> None:
+    def _set_virtual_topic(
+        self, msg: Message, batch_roots: dict[int, int] | None = None
+    ) -> None:
         """Resolve and stamp virtual_topic_id on the (frozen) message in-place."""
-        if msg.reply_to_message_id:
-            root = self.repo.reply_root(msg.chat_id, msg.reply_to_message_id)
-        else:
+        if batch_roots is None:
+            batch_roots = {}
+        if is_thread_start(msg.reply_to_message_id, msg.reply_to_top_message_id):
             root = msg.id
+        elif msg.reply_to_message_id in batch_roots:
+            root = batch_roots[msg.reply_to_message_id]
+        else:
+            root = self.repo.thread_root_of(msg.chat_id, msg.reply_to_message_id)
+        batch_roots[msg.id] = root
         object.__setattr__(msg, "virtual_topic_id", root)

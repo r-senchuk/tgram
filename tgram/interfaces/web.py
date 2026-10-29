@@ -305,9 +305,10 @@ def launch(cfg: Config, chat_id: int | None = None,
     scope_label = str(target_chat) if target_chat else "all chats"
 
     last_hits: list = []  # stores hits from the most recent respond() call
+    last_context_index: dict[int, tuple[int, int]] = {}
 
     def respond(message, history, model_choice, topic_choice, think_toggle):
-        nonlocal last_hits
+        nonlocal last_hits, last_context_index
         try:
             llm = _make_llm(model_choice)
             ai  = AIService(fts, llm, embedder=OllamaAdapter())
@@ -323,7 +324,7 @@ def launch(cfg: Config, chat_id: int | None = None,
                     except StopIteration:
                         pass
 
-            response, hits = ai.ask_with_history(
+            response, hits, ctx_idx = ai.ask_with_history(
                 message, pairs,
                 chat_id=chat_id,
                 topic_id=topic_choice,
@@ -331,6 +332,7 @@ def launch(cfg: Config, chat_id: int | None = None,
                 think=think_toggle,
             )
             last_hits = hits
+            last_context_index = ctx_idx
 
             prefix = f"*↗ {len(hits)} messages retrieved*\n\n"
             partial = ""
@@ -347,32 +349,46 @@ def launch(cfg: Config, chat_id: int | None = None,
     def lookup_context(msg_id_str: str):
         try:
             mid = int(msg_id_str.strip())
-            row = repo.get_by_id(mid, chat_id)
+            resolved_pair = last_context_index.get(mid)
+            resolved_chat_id = resolved_pair[0] if resolved_pair else None
+
+            row = None
+            if resolved_chat_id is not None:
+                row = repo.get_by_id(mid, resolved_chat_id)
+            if not row:
+                row = repo.get_by_id(mid, chat_id)
+            if not row:
+                row = repo.get_by_id(mid, None)
             if not row:
                 return (gr.update(value=f"Message `{mid}` not found.", visible=True),
                         gr.update(visible=True))
-            effective_topic = row["reply_to_top_message_id"] or row["virtual_topic_id"]
-            use_virtual     = (row["reply_to_top_message_id"] is None
-                               and row["virtual_topic_id"] is not None)
+
             hit = SearchHit(
                 chat_id=row["chat_id"],
                 message_id=row["id"],
                 date=row["date"],
                 text=row["text"] or "",
-                username=row["username"],
-                from_user_id=row["from_user_id"],
-                topic_id=effective_topic,
+                username=row.get("username"),
+                from_user_id=row.get("from_user_id"),
+                topic_id=row.get("reply_to_top_message_id"),
                 topic_title=None,
                 snippet="",
+                virtual_topic_id=row.get("virtual_topic_id"),
+                reply_to_message_id=row.get("reply_to_message_id"),
             )
-            ctx_msgs = fts.get_context(hit, before=5, after=5, use_virtual_topic=use_virtual)
-            lines = [f"**Context around msg:{mid}**\n"]
+            ctx_msgs = fts.get_conversation(hit, max_thread_msgs=12, window=2)
+            lines = [f"**Conversation around msg:{mid}**\n"]
+            disp_ids = {m.message_id for m in ctx_msgs}
             for m in ctx_msgs:
+                if getattr(m, "skipped_before", 0) > 0:
+                    lines.append(f"*(… {m.skipped_before} messages skipped …)*")
                 who    = f"@{m.username}" if m.username else f"user:{m.from_user_id}"
-                d      = m.date[:16].replace("T", " ")
+                d      = m.date[:16].replace("T", " ") if m.date and len(m.date) >= 16 else (m.date or "")
+                reply_to = getattr(m, "reply_to_message_id", None)
+                reply_prefix = f"↳ [reply to msg:{reply_to}] " if (reply_to and reply_to in disp_ids) else ""
                 txt    = (m.text or "").replace("\n", " ")[:300]
-                marker = "**→**" if m.is_hit else "·"
-                lines.append(f"{marker} `{d}` **{who}**: {txt}")
+                marker = "**→**" if getattr(m, "is_hit", False) else "·"
+                lines.append(f"{marker} `{d}` **{who}**: {reply_prefix}{txt}")
             return (gr.update(value="\n\n".join(lines), visible=True),
                     gr.update(visible=True))
         except Exception as exc:

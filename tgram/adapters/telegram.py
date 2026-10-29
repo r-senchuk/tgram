@@ -40,9 +40,12 @@ class TelegramClientAdapter:
         min_id: int = 0,
         max_id: int = 0,
         limit: int | None = None,
+        reverse: bool = False,
     ) -> AsyncIterator[Message]:
-        """Yield messages from a chat, newest first.
+        """Yield messages from a chat.
 
+        reverse=False (default): newest first
+        reverse=True: oldest first
         min_id: only messages with id > min_id
         max_id: only messages with id < max_id
         limit:  stop after this many (None = all)
@@ -50,7 +53,7 @@ class TelegramClientAdapter:
         """
         try:
             async for tlm in self.client.iter_messages(
-                chat_id, min_id=min_id, max_id=max_id, limit=limit
+                chat_id, min_id=min_id, max_id=max_id, limit=limit, reverse=reverse
             ):
                 if tlm is None:
                     continue
@@ -103,14 +106,16 @@ class TelegramClientAdapter:
         sender = tlm.sender
         reply = tlm.reply_to
 
-        reply_to_msg_id = getattr(reply, "reply_to_msg_id", None) if reply else None
+        has_cross_peer = getattr(reply, "reply_to_peer_id", None) is not None if reply else False
+        raw_reply_id = getattr(reply, "reply_to_msg_id", None) if reply else None
+        reply_to_msg_id = None if has_cross_peer else raw_reply_id
 
         # In forum channels, reply_to_top_id holds the native topic root ID.
         # When a message replies directly to the topic root, Telegram omits
         # reply_to_top_id (it equals reply_to_msg_id), so we fall back to it.
         is_forum_reply = getattr(reply, "forum_topic", False) if reply else False
         if is_forum_reply:
-            native_topic = getattr(reply, "reply_to_top_id", None) or reply_to_msg_id
+            native_topic = getattr(reply, "reply_to_top_id", None) or raw_reply_id
         else:
             native_topic = None
 

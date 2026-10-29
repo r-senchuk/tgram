@@ -45,12 +45,18 @@ status:
 daemon:
 	$(TGRAM) daemon
 
-# ── Topics ────────────────────────────────────────────────────────────────────
+# ── Topics & Threads ──────────────────────────────────────────────────────────
 sync-topics:
 	$(TGRAM) sync_topics $(_FETCH_CHAT)
 
 list-topics:
 	$(TGRAM) list_topics $(_FETCH_CHAT)
+
+repair-threads:
+	$(TGRAM) repair_threads $(_CHAT)
+
+thread:
+	$(TGRAM) thread $(ID) $(_CHAT)
 
 # ── Search ────────────────────────────────────────────────────────────────────
 rebuild-fts:
@@ -72,4 +78,4 @@ web:
 
 .PHONY: list-chan channels channels-refresh channels-enable channels-disable \
         fetch-new fetch-old fetch-old-loop fetch-all fetch-scan status daemon \
-        sync-topics list-topics rebuild-fts search embed ask web
+        sync-topics list-topics repair-threads thread rebuild-fts search embed ask web

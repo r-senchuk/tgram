@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import logging
+import sys
 
 from tgram.adapters.repo_channels import ChannelRepo
 from tgram.adapters.repo_embeddings import EmbeddingRepo
@@ -47,16 +48,28 @@ def build_parser() -> argparse.ArgumentParser:
     lt = sub.add_parser("list_topics", help="List all known topics with message counts")
     lt.add_argument("--chat", type=int, default=None)
 
+    # ── threads ───────────────────────────────────────────────────────────────
+    rt = sub.add_parser("repair_threads", help="Recompute virtual_topic_id reply chains")
+    rt.add_argument("--chat", type=int, default=None)
+    rt.add_argument("--dry-run", action="store_true", help="Count rows that would change without writing")
+
+    th = sub.add_parser("thread", help="Reconstruct and print the conversation around a message ID")
+    th.add_argument("message_id", type=int)
+    th.add_argument("--chat", type=int, default=None)
+    th.add_argument("--window", type=int, default=2, help="Temporal neighbour messages before/after")
+
     # ── search ────────────────────────────────────────────────────────────────
     sr = sub.add_parser("search", help="Full-text search the message archive")
     sr.add_argument("query", help='Search query (use "phrase" for phrase, term* for prefix)')
-    sr.add_argument("--chat",    type=int, default=None)
-    sr.add_argument("--topic",   type=int, default=None, help="Filter by topic_id")
-    sr.add_argument("--since",   default=None, help="From date YYYY-MM-DD")
-    sr.add_argument("--until",   default=None, help="To date YYYY-MM-DD")
-    sr.add_argument("--limit",   type=int, default=20)
-    sr.add_argument("--context", type=int, default=0, metavar="N",
+    sr.add_argument("--chat",     type=int, default=None)
+    sr.add_argument("--topic",    type=int, default=None, help="Filter by topic_id")
+    sr.add_argument("--since",    default=None, help="From date YYYY-MM-DD")
+    sr.add_argument("--until",    default=None, help="To date YYYY-MM-DD")
+    sr.add_argument("--limit",    type=int, default=20)
+    sr.add_argument("--context",  type=int, default=0, metavar="N",
                     help="Show N messages before and after each hit")
+    sr.add_argument("--fts-only", action="store_true",
+                    help="Disable semantic vector search and use FTS5 keyword match only")
 
     sub.add_parser("rebuild_fts", help="Rebuild the full-text search index from scratch")
 
@@ -141,6 +154,62 @@ async def run(args) -> int:
     repo_chan   = ChannelRepo(cfg.db_path)
     repo_embed  = EmbeddingRepo(cfg.db_path)
 
+    if args.cmd == "repair_threads":
+        n = repo.repair_virtual_topics(chat_id=args.chat, dry_run=args.dry_run)
+        prefix = "[dry-run] Would update" if args.dry_run else "Updated"
+        scope = f"chat {args.chat}" if args.chat else "all chats"
+        print(f"{prefix} {n:,} message(s) across {scope}.")
+        return 0
+
+    if args.cmd == "thread":
+        row = repo.get_by_id(args.message_id, args.chat)
+        if not row and args.chat is None and cfg.default_chat_id:
+            row = repo.get_by_id(args.message_id)
+        if not row:
+            print(f"Message {args.message_id} not found.")
+            return 1
+
+        from tgram.adapters.search_fts import FTSSearch, SearchHit
+
+        fts = FTSSearch(cfg.db_path, embedding_repo=repo_embed)
+        hit = SearchHit(
+            chat_id=row["chat_id"],
+            message_id=row["id"],
+            date=row["date"],
+            text=row["text"] or "",
+            username=row.get("username"),
+            from_user_id=row.get("from_user_id"),
+            topic_id=row.get("reply_to_top_message_id"),
+            topic_title=None,
+            snippet="",
+            virtual_topic_id=row.get("virtual_topic_id"),
+            reply_to_message_id=row.get("reply_to_message_id"),
+        )
+        conv = fts.get_conversation(hit, window=args.window)
+        vtid = row.get("virtual_topic_id")
+        vtid_str = f" / vtid {vtid}" if vtid is not None else ""
+        print(f"Conversation around msg {args.message_id} (chat {row['chat_id']}{vtid_str}):\n")
+
+        def fmt_who(username, from_user_id):
+            if username:
+                return f"@{username}"
+            if from_user_id:
+                return f"user:{from_user_id}"
+            return "unknown"
+
+        disp_ids = {m.message_id for m in conv}
+        for m in conv:
+            if getattr(m, "skipped_before", 0) > 0:
+                print(f"   … {m.skipped_before} earlier message(s) in thread …")
+            marker = ">>>" if getattr(m, "is_hit", False) else "   "
+            d = m.date[:16].replace("T", " ") if m.date and len(m.date) >= 16 else (m.date or "")
+            w = fmt_who(m.username, m.from_user_id)
+            reply_to = getattr(m, "reply_to_message_id", None)
+            reply_prefix = f"↳ [reply to msg:{reply_to}] " if (reply_to and reply_to in disp_ids) else ""
+            t = (m.text or "").replace("\n", " ")
+            print(f"{marker} [{d}] [msg:{m.message_id}] {w}: {reply_prefix}{t}")
+        return 0
+
     if args.cmd == "embed_all":
         from tgram.adapters.llm_ollama import OllamaAdapter
         from tgram.services.embed import EmbedService
@@ -149,18 +218,21 @@ async def run(args) -> int:
         return 0
 
     if args.cmd == "search":
+        from tgram.adapters.llm_ollama import OllamaAdapter
         from tgram.adapters.search_fts import FTSSearch
         from tgram.services.search import SearchService
-        fts = FTSSearch(cfg.db_path)
-        svc_search = SearchService(fts)
-        hits = svc_search.search(
+        fts = FTSSearch(cfg.db_path, embedding_repo=repo_embed)
+        svc_search = SearchService(fts, embedder=OllamaAdapter())
+        hits, mode = svc_search.search(
             args.query,
+            semantic=not args.fts_only,
             chat_id=args.chat,
             topic_id=args.topic,
             since=args.since,
             until=args.until,
             limit=args.limit,
         )
+        print(f"mode: {mode}", file=sys.stderr)
         if not hits:
             print("(no results)")
             return 0
@@ -173,19 +245,24 @@ async def run(args) -> int:
             return "unknown"
 
         for h in hits:
-            date  = h.date[:16].replace("T", " ")
+            date  = h.date[:16].replace("T", " ") if h.date and len(h.date) >= 16 else (h.date or "")
             who   = fmt_who(h.username, h.from_user_id)
             topic = f" in {h.topic_title}" if h.topic_title else ""
             print(f"── [{date}] {who}{topic}  (chat {h.chat_id} / msg {h.message_id})")
 
             if args.context > 0:
-                ctx = fts.get_context(h, before=args.context, after=args.context)
+                ctx = fts.get_conversation(h, window=args.context)
+                disp_ids = {m.message_id for m in ctx}
                 for msg in ctx:
-                    marker = ">>>" if msg.is_hit else "   "
-                    d = msg.date[:16].replace("T", " ")
+                    if getattr(msg, "skipped_before", 0) > 0:
+                        print(f"   … {msg.skipped_before} more …")
+                    marker = ">>>" if getattr(msg, "is_hit", False) else "   "
+                    d = msg.date[:16].replace("T", " ") if msg.date and len(msg.date) >= 16 else (msg.date or "")
                     w = fmt_who(msg.username, msg.from_user_id)
+                    reply_to = getattr(msg, "reply_to_message_id", None)
+                    reply_prefix = f"↳ [reply to msg:{reply_to}] " if (reply_to and reply_to in disp_ids) else ""
                     t = (msg.text or "").replace("\n", " ")[:120]
-                    print(f"   {marker} [{d}] {w}: {t}")
+                    print(f"   {marker} [{d}] {w}: {reply_prefix}{t}")
             else:
                 print(f"   {h.snippet}")
             print()
@@ -215,7 +292,7 @@ async def run(args) -> int:
         stream = not getattr(args, "no_stream", False)
         think  = not getattr(args, "no_think",  False)
 
-        response, hits = ai.ask(
+        response, hits, _ctx_idx = ai.ask(
             args.question,
             chat_id=args.chat,
             topic_id=args.topic,

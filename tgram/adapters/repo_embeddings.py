@@ -99,22 +99,55 @@ class EmbeddingRepo:
         query_vector: list[float],
         *,
         chat_id: int | None = None,
+        topic_id: int | None = None,
+        since: str | None = None,
+        until: str | None = None,
         limit: int = 50,
     ) -> list[tuple[int, int, float]]:
         """Return (chat_id, message_id, distance) ordered by cosine distance ASC.
 
         Groups by message so each message appears once at its best-matching chunk distance.
         """
-        sql = """
-            SELECT chat_id, message_id,
-                   MIN(vec_distance_cosine(vector, ?)) AS dist
-            FROM embeddings
-            WHERE (? IS NULL OR chat_id = ?)
-            GROUP BY chat_id, message_id
-            ORDER BY dist ASC
-            LIMIT ?
-        """
         packed = _pack(query_vector)
+        if topic_id is None and since is None and until is None:
+            sql = """
+                SELECT chat_id, message_id,
+                       MIN(vec_distance_cosine(vector, ?)) AS dist
+                FROM embeddings
+                WHERE (? IS NULL OR chat_id = ?)
+                GROUP BY chat_id, message_id
+                ORDER BY dist ASC
+                LIMIT ?
+            """
+            params: list = [packed, chat_id, chat_id, limit]
+        else:
+            sql = """
+                SELECT e.chat_id, e.message_id,
+                       MIN(vec_distance_cosine(e.vector, ?)) AS dist
+                FROM embeddings e
+                JOIN messages m ON m.chat_id = e.chat_id AND m.id = e.message_id
+                WHERE 1=1
+            """
+            params = [packed]
+            if chat_id is not None:
+                sql += " AND e.chat_id = ?"
+                params.append(chat_id)
+            if topic_id is not None:
+                sql += " AND m.reply_to_top_message_id = ?"
+                params.append(topic_id)
+            if since is not None:
+                sql += " AND m.date >= ?"
+                params.append(since)
+            if until is not None:
+                sql += " AND m.date <= ?"
+                params.append(until)
+            sql += """
+                GROUP BY e.chat_id, e.message_id
+                ORDER BY dist ASC
+                LIMIT ?
+            """
+            params.append(limit)
+
         with self._conn() as c:
-            rows = c.execute(sql, [packed, chat_id, chat_id, limit]).fetchall()
+            rows = c.execute(sql, params).fetchall()
         return [(r["chat_id"], r["message_id"], r["dist"]) for r in rows]
