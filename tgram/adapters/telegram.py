@@ -1,3 +1,4 @@
+import fcntl
 import logging
 from pathlib import Path
 from typing import AsyncIterator
@@ -10,23 +11,62 @@ from tgram.domain.message import Message
 logger = logging.getLogger(__name__)
 
 
+class TelegramSessionLockedError(RuntimeError):
+    """Raised when another tgram process already holds the Telegram session lock."""
+    pass
+
+
 class TelegramClientAdapter:
     def __init__(self, api_id: int, api_hash: str, sessions_dir: Path):
         self.api_id = api_id
         self.api_hash = api_hash
-        self.session_path = str(sessions_dir / "tgram")
+        self.sessions_dir = Path(sessions_dir)
+        self.session_path = str(self.sessions_dir / "tgram")
+        self.lock_path = self.sessions_dir / "tgram.lock"
+        self._lock_file = None
         self._client: TelegramClient | None = None
 
     async def __aenter__(self) -> "TelegramClientAdapter":
-        self._client = TelegramClient(self.session_path, self.api_id, self.api_hash)
-        await self._client.start()
-        me = await self._client.get_me()
-        logger.info(f"Connected as @{me.username} ({me.first_name})")
-        return self
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        self._lock_file = open(self.lock_path, "a+")
+        try:
+            fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            self._lock_file.close()
+            self._lock_file = None
+            raise TelegramSessionLockedError(
+                f"Another tgram process (e.g. background daemon) is currently holding the Telegram session lock ({self.lock_path}). "
+                "Stop the running process or wait for it to finish before proceeding."
+            )
+
+        try:
+            self._client = TelegramClient(self.session_path, self.api_id, self.api_hash)
+            await self._client.start()
+            me = await self._client.get_me()
+            logger.info(f"Connected as @{me.username} ({me.first_name})")
+            return self
+        except Exception:
+            if self._lock_file:
+                try:
+                    fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+                    self._lock_file.close()
+                except Exception:
+                    pass
+                self._lock_file = None
+            raise
 
     async def __aexit__(self, *exc) -> None:
-        if self._client:
-            await self._client.disconnect()
+        try:
+            if self._client:
+                await self._client.disconnect()
+        finally:
+            if self._lock_file:
+                try:
+                    fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+                    self._lock_file.close()
+                except Exception:
+                    pass
+                self._lock_file = None
 
     @property
     def client(self) -> TelegramClient:

@@ -58,7 +58,7 @@ PRAGMA integrity_check;
 
 | Operation | Measured Latency | Details |
 |---|---|---|
-| **Pytest Suite (39 tests)** | **~2.2s** | Threading, repair idempotency, 40-msg thread reconstruction, FTS & vector filters, AI context builder, CLI, repos, and web linkify |
+| **Pytest Suite (45 tests)** | **~2.2s** | Threading, repair idempotency, 40-msg thread reconstruction, FTS & vector filters, AI context builder, CLI, repos, web linkify, and autonomous daemon/db factory |
 | **`repair_virtual_topics` (dry-run / no-op)** | **~0.70s** | Full ordered scan of 321,359 rows across all chats |
 | **Hybrid Search (`SearchService.search`)** | **~0.60s** | FTS5 BM25 + `sqlite-vec` cosine scan over 290,801 chunks + RRF merge |
 | **FTS-Only / Offline Fallback Search** | **0.004s** | Instant fallback when `--fts-only`, FTS operators, or Ollama offline |

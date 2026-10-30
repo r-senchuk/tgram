@@ -63,16 +63,22 @@ class EmbedService:
         self,
         chat_id: int | None = None,
         batch_size: int = 100,
+        max_batches: int | None = None,
+        quiet: bool = False,
     ) -> int:
-        """Embed all messages that lack embeddings. Returns total count embedded."""
+        """Embed messages that lack embeddings. Returns total count embedded."""
         total = self.repo.count_missing(chat_id, EMBED_MODEL)
         if total == 0:
-            print("All messages already embedded.")
+            if not quiet:
+                print("All messages already embedded.")
             return 0
 
-        print(f"Embedding {total:,} messages in batches of {batch_size}…")
-        done = saved = 0
+        if not quiet:
+            print(f"Embedding {total:,} messages in batches of {batch_size}…")
+        done = saved = batches = 0
         while True:
+            if max_batches is not None and batches >= max_batches:
+                break
             batch = self.repo.ids_without_embeddings(chat_id, EMBED_MODEL, limit=batch_size)
             if not batch:
                 break
@@ -82,7 +88,10 @@ class EmbedService:
                 self.repo.save_many(rows)
             saved += len(rows)
             done  += len(batch)
-            print(f"  {done:,} / {total:,}", end="\r", flush=True)
+            batches += 1
+            if not quiet:
+                print(f"  {done:,} / {total:,}", end="\r", flush=True)
 
-        print(f"\nDone. Embedded {saved:,} messages.")
+        if not quiet:
+            print(f"\nDone. Embedded {saved:,} messages.")
         return saved

@@ -12,3 +12,5 @@ INSERT OR IGNORE INTO embeddings_new (chat_id, message_id, chunk_idx, vector, mo
 
 DROP TABLE embeddings;
 ALTER TABLE embeddings_new RENAME TO embeddings;
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (5);

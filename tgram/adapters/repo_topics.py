@@ -2,6 +2,7 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
+from tgram.adapters.db import get_connection
 from tgram.domain.topic import Topic
 
 
@@ -11,8 +12,7 @@ class TopicRepo:
 
     @contextmanager
     def _conn(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection(self.db_path)
         try:
             yield conn
             conn.commit()

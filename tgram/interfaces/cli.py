@@ -8,7 +8,7 @@ from tgram.adapters.repo_channels import ChannelRepo
 from tgram.adapters.repo_embeddings import EmbeddingRepo
 from tgram.adapters.repo_messages import MessageRepo
 from tgram.adapters.repo_topics import TopicRepo
-from tgram.adapters.telegram import TelegramClientAdapter
+from tgram.adapters.telegram import TelegramClientAdapter, TelegramSessionLockedError
 from tgram.config import Config
 from tgram.services.ingest import IngestService
 
@@ -435,3 +435,6 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\nStopped.")
         return 0
+    except TelegramSessionLockedError as exc:
+        print(f"\n[error] {exc}", file=sys.stderr)
+        return 1

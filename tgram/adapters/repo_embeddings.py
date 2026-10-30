@@ -3,9 +3,7 @@ import struct
 from contextlib import contextmanager
 from pathlib import Path
 
-import sqlite_vec
-
-MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations"
+from tgram.adapters.db import ensure_schema, get_connection
 
 
 def _pack(vector: list[float]) -> bytes:
@@ -15,26 +13,11 @@ def _pack(vector: list[float]) -> bytes:
 class EmbeddingRepo:
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
-        self._apply_schema()
-
-    def _apply_schema(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            for sql_file in sorted(MIGRATIONS_DIR.glob("*.sql")):
-                if sql_file.name == "005_embeddings_chunked.sql":
-                    # This migration does DROP+RENAME — skip if already applied.
-                    cols = {r[1] for r in conn.execute("PRAGMA table_info(embeddings)").fetchall()}
-                    if "chunk_idx" in cols:
-                        continue
-                conn.executescript(sql_file.read_text())
+        ensure_schema(self.db_path)
 
     @contextmanager
     def _conn(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection(self.db_path, load_vec=True)
         try:
             yield conn
             conn.commit()

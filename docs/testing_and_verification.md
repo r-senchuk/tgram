@@ -18,14 +18,20 @@ make test
 .venv/bin/pytest -v
 ```
 
-All 39 tests execute in **~2.2 seconds** against clean temporary SQLite databases.
+All 45 tests execute in **~2.2 seconds** against clean temporary SQLite databases.
 
 ---
 
-## 2. Test Suite Matrix (39 Tests across 9 Modules)
+## 2. Test Suite Matrix (45 Tests across 10 Modules)
 
 | Test Module | Test Name | Target Component | Description |
 |---|---|---|---|
+| **`test_autonomous_daemon_and_db.py`** | `test_db_factory_pragmas_and_migration_gating` | `tgram.adapters.db` | Verifies SQLite pragmas (`WAL`, `busy_timeout=10000`, `synchronous=NORMAL`) and 0ms migration gating |
+| | `test_db_backward_compatibility_chunk_idx` | `tgram.adapters.db` | Backfills legacy databases with versions 4 and 5 without destructive DROP TABLE re-runs |
+| | `test_telegram_session_file_lock` | `tgram.adapters.telegram` | Non-blocking advisory file locking preventing simultaneous session access |
+| | `test_daemon_cycle_auto_embed` | `tgram.interfaces.daemon` | Background auto-embedding integration at the end of each fetch cycle |
+| | `test_daemon_recovers_when_ollama_offline` | `tgram.interfaces.daemon` | Graceful error recovery when Ollama is offline without interrupting the polling loop |
+| | `test_embed_service_bounded_backfill` | `tgram.services.embed` | Bounded batching (`max_batches`) and silent execution (`quiet=True`) |
 | **`test_threading.py`** | `test_is_thread_start` | `tgram.domain.threading` | Distinguishes forum top-level starters (`reply_to_message_id == reply_to_top_message_id`) from nested replies |
 | | `test_resolve_root_top_level` | `tgram.domain.threading` | Top-level non-forum message resolves to its own ID |
 | | `test_resolve_root_forum_top_level` | `tgram.domain.threading` | Forum starter post resolves to its own ID (avoids mega-thread collapse) |

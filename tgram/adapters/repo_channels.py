@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tgram.adapters.db import get_connection
 from tgram.domain.channel import Channel
 
 
@@ -12,8 +13,7 @@ class ChannelRepo:
 
     @contextmanager
     def _conn(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection(self.db_path)
         try:
             yield conn
             conn.commit()

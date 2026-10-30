@@ -80,7 +80,7 @@ make ask Q="Як відкрити JDG?"        # AI Q&A grounded in conversation
 
 make embed                           # generate embeddings for unembedded messages
 make web                             # launch Gradio web UI on http://localhost:7860
-make test                            # run full test suite (39 automated tests)
+make test                            # run full test suite (45 automated tests)
 ```
 
 ---
@@ -224,7 +224,7 @@ python -m tgram web --chat -1001593560584 --port 7860
 
 ### 9. Running Tests
 
-The test suite runs 39 automated unit and integration tests across domain models, threading algorithms, database repos, FTS5 query sanitizers, LiteLLM/Ollama streaming adapters, CLI commands, and Gradio citation linkification in ~2.2 seconds:
+The test suite runs 45 automated unit and integration tests across domain models, threading algorithms, database repos, FTS5 query sanitizers, LiteLLM/Ollama streaming adapters, CLI commands, Gradio citation linkification, and autonomous daemon/database concurrency in ~2.2 seconds:
 
 ```bash
 make test
@@ -263,7 +263,7 @@ Detailed architecture, benchmarks, testing invariants, and strategic roadmaps ar
 | **4b — Gradio Web UI** | Multi-turn chat, dark/light glass theme, clickable citation context | ✅ Done |
 | **4c — Semantic Embeddings** | Chunked 768-dim vectors (`sqlite-vec`) + Reciprocal Rank Fusion | ✅ Done |
 | **5 — Causal Threading & Conversations** | Oldest-first `fetch_new`, 206.8k thread repair, `get_conversation`, filtered hybrid search | ✅ Done |
-| **6 — Autonomous Daemon & Hardening** | Incremental auto-embed in daemon, SQLite pragma factory, session file lock | 📋 Planned ([Strategy](docs/development_strategy_and_roadmap.md)) |
+| **6 — Autonomous Daemon & Hardening** | Incremental auto-embed in daemon, SQLite pragma factory, session file lock | ✅ Done |
 | **7 — Thread Embeddings & Reranking** | Thread-contextual embeddings, `flashrank` cross-encoder, multi-turn query rewriting | 📋 Planned ([Strategy](docs/development_strategy_and_roadmap.md)) |
 | **8 — MCP Server & Knowledge Distillation** | `FastMCP` server for AI assistants + automated per-topic FAQ distillation | 📋 Planned ([Strategy](docs/development_strategy_and_roadmap.md)) |
 

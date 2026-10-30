@@ -3,27 +3,19 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from tgram.adapters.db import ensure_schema, get_connection
 from tgram.domain.message import Message
 from tgram.domain.threading import resolve_root
-
-MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations"
 
 
 class MessageRepo:
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._apply_schema()
-
-    def _apply_schema(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            for sql_file in sorted(MIGRATIONS_DIR.glob("*.sql")):
-                conn.executescript(sql_file.read_text())
+        ensure_schema(self.db_path)
 
     @contextmanager
     def _conn(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection(self.db_path)
         try:
             yield conn
             conn.commit()

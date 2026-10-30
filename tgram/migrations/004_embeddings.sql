@@ -5,3 +5,6 @@ CREATE TABLE IF NOT EXISTS embeddings (
     model       TEXT    NOT NULL,
     PRIMARY KEY (chat_id, message_id)
 );
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (4);
+
