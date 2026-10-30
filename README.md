@@ -80,6 +80,7 @@ make ask Q="Як відкрити JDG?"        # AI Q&A grounded in conversation
 
 make embed                           # generate embeddings for unembedded messages
 make web                             # launch Gradio web UI on http://localhost:7860
+make test                            # run full test suite (39 automated tests)
 ```
 
 ---
@@ -223,18 +224,25 @@ python -m tgram web --chat -1001593560584 --port 7860
 
 ### 9. Running Tests
 
+The test suite runs 39 automated unit and integration tests across domain models, threading algorithms, database repos, FTS5 query sanitizers, LiteLLM/Ollama streaming adapters, CLI commands, and Gradio citation linkification in ~2.2 seconds:
+
 ```bash
-.venv/bin/python -m pytest -v
+make test
+# Or directly via pytest:
+.venv/bin/pytest -v
 ```
+
+See [docs/testing_and_verification.md](docs/testing_and_verification.md) for the complete test matrix and mathematical proofs for database tree invariants.
 
 ---
 
 ## Documentation (`docs/` & `plans/`)
 
-Detailed architecture, benchmarks, and strategic roadmaps are maintained in the [`docs/`](docs/) and [`plans/`](plans/) directories:
+Detailed architecture, benchmarks, testing invariants, and strategic roadmaps are maintained in the [`docs/`](docs/) and [`plans/`](plans/) directories:
 
 ### Architecture, Metrics & Strategy (`docs/`)
 - **[Architecture, Threading & Hybrid Retrieval Data Flow](docs/architecture_and_data_flow.md)** — Layered design, SQLite schema, Telethon forum vs. reply semantics, `resolve_root` & `repair_virtual_topics`, `get_conversation` priority algorithm, and hybrid RRF search.
+- **[Testing & Invariants Verification Guide](docs/testing_and_verification.md)** — Comprehensive 39-test matrix across 9 modules, formal mathematical definitions of message DAG tree induction, and reproducible SQL production audit queries.
 - **[Database Verification & Production Archive Metrics](docs/database_verification_and_metrics.md)** — Live benchmarks on 321k+ messages and 290k+ embeddings, per-chat thread distributions, SQL integrity invariants, and query latency measurements.
 - **[Development Strategy, Enhancements & Stability Roadmap](docs/development_strategy_and_roadmap.md)** — Next phases (auto-embedding daemon, thread-contextual embeddings, cross-encoder reranking, FastMCP server), library replacement trade-offs (`sqlite-vec` vs. LanceDB, `flashrank`, `semchunk`), and SQLite/Telethon hardening.
 
