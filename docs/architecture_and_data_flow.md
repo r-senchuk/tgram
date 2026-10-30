@@ -36,13 +36,14 @@ tgram/
 ├── interfaces/     cli.py, daemon.py, web.py        — CLI arg parsing, background loop, Gradio UI
 ├── services/       ingest.py, search.py,            — Use-case orchestration (zero raw SQL/network I/O)
 │                   ai.py, embed.py
-├── adapters/       telegram.py, repo_messages.py,   — Telethon, SQLite, FTS5, sqlite-vec,
-│                   repo_channels.py, repo_topics.py,  Ollama & LiteLLM clients
-│                   repo_embeddings.py, search_fts.py,
-│                   llm_ollama.py, llm_litellm.py
+├── adapters/       db.py, telegram.py,              — Centralized DB factory, Telethon with session lock,
+│                   repo_messages.py, repo_channels.py, SQLite repos, FTS5 search, sqlite-vec,
+│                   repo_topics.py, repo_embeddings.py, Ollama & LiteLLM clients
+│                   search_fts.py, llm_ollama.py,
+│                   llm_litellm.py
 ├── domain/         message.py, channel.py,          — Pure frozen dataclasses & pure functions (zero I/O)
 │                   topic.py, threading.py
-└── migrations/     001_*.sql … 005_*.sql            — Idempotent SQLite schema migrations
+└── migrations/     001_*.sql … 005_*.sql            — Version-gated SQLite schema migrations
 ```
 
 ---
@@ -56,8 +57,28 @@ tgram/
 | `topics` | `(chat_id, topic_id)` | Forum topic names mapped from Telegram `MessageService` root messages. |
 | `messages_fts` | `rowid` (FTS5) | External-content FTS5 table over `messages.text` (`unicode61 remove_diacritics 2`), kept in sync via `AFTER INSERT / UPDATE OF text / DELETE` triggers. |
 | `embeddings` | `(chat_id, message_id, chunk_idx)` | Packed 768-dim `float32` vectors (`nomic-embed-text-v2-moe:latest`), queried via `sqlite-vec`'s `vec_distance_cosine()`. |
+| `schema_version` | `version` | Migration ledger tracking applied versions 1..5 for 0ms startup overhead. |
 
 ---
+
+## Centralized Connection Factory & Concurrency Hardening (`tgram/adapters/db.py`)
+
+All database connections across repositories and search adapters are instantiated through `get_connection()`:
+- `PRAGMA journal_mode = WAL;`: Enables concurrent readers alongside a single writer.
+- `PRAGMA synchronous = NORMAL;`: Ensures ACID durability while drastically reducing disk sync overhead.
+- `PRAGMA busy_timeout = 10000;`: Waits up to 10 seconds on lock contention before raising an error.
+- `PRAGMA temp_store = MEMORY;` & `PRAGMA cache_size = -64000;`: Keeps temporary tables in RAM with a dedicated 64 MB page cache.
+- **Migration Gating (`ensure_schema`)**: Evaluates `schema_version`. If all migration versions are recorded, skips disk I/O entirely (measured at 2.36 ms).
+
+---
+
+## Telegram Session Concurrency Locking (`tgram/adapters/telegram.py`)
+
+Telethon saves state in `data/sessions/tgram.session` (a SQLite database). If the background daemon is running and a CLI fetch/sync command is invoked concurrently, both processes attempt to open the session file, risking database corruption.
+- `TelegramClientAdapter.__aenter__` acquires an advisory file lock (`fcntl.flock(LOCK_EX | LOCK_NB)` on `data/sessions/tgram.lock`).
+- If another process holds the lock, it immediately raises `TelegramSessionLockedError`.
+- CLI commands intercept this exception and display a clean notice on `stderr` (exit code 1) without traceback noise.
+- Releasing the lock (`LOCK_UN`) is guaranteed in `__aexit__`.
 
 ## 1. Causal Ingest & Thread Root Resolution (`virtual_topic_id`)
 
@@ -90,6 +111,7 @@ def resolve_root(
 1. `IngestService.fetch_new()` streams messages **oldest-first** (`reverse=True`), so `max_id` advances monotonically and an interrupted fetch never leaves a hidden gap.
 2. During streaming, `IngestService` deduplicates each 500-message batch with a single `MessageRepo.existing_ids()` query and stamps a best-effort `virtual_topic_id`.
 3. At the end of every fetch operation (`fetch_new`, `fetch_old`, `fetch_old_loop`, `fetch_gap`) that saves rows, `MessageRepo.repair_virtual_topics(chat_id)` runs an ordered single-pass scan (`ORDER BY chat_id, id`) and updates any changed `virtual_topic_id` values in one transaction (~0.5s). Late-arriving or backfilled parents automatically re-root their descendants without touching `messages_fts` or `embeddings`.
+4. **Autonomous Daemon & Background Auto-Embedding:** In `run_daemon()`, at the end of every polling cycle, `EmbedService.backfill(batch_size=100, max_batches=5, quiet=True)` automatically embeds unembedded messages (up to 500 chunks per 5-minute cycle) in the background. If Ollama is offline or times out, the daemon logs a warning and proceeds without interrupting the polling schedule.
 
 ---
 

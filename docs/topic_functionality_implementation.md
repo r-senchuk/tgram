@@ -1,5 +1,8 @@
 # Topic/Thread Functionality Implementation
 
+> [!NOTE]
+> **Historical Design Note (May 2026):** This document describes the initial prototype for topic handling. For the verified production causal threading engine and reply graph invariants, see [architecture_and_data_flow.md](architecture_and_data_flow.md) and [testing_and_verification.md](testing_and_verification.md).
+
 ## Overview
 
 This document describes the implementation of topic/thread support in the Telegram Message Intelligence Pipeline. Topics allow messages to be organized by thread, which is essential for forum-style Telegram chats where messages are grouped by discussion topics.

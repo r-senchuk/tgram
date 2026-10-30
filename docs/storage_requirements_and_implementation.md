@@ -1,5 +1,8 @@
 # Storage Requirements and Implementation Plan
 
+> [!NOTE]
+> **Historical Design Note (May 2026):** This document represents the initial storage migration planning. For the active production schema, migrations, and concurrency architecture, see [architecture_and_data_flow.md](architecture_and_data_flow.md).
+
 ## Overview
 
 This document outlines the requirements, architecture, and implementation plan for migrating from JSON file storage to a robust SQLite-based storage system with JSON1 extension support, as outlined in the Telegram Message Intelligence Pipeline.

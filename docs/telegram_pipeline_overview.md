@@ -1,5 +1,8 @@
 # Telegram Message Intelligence Pipeline
 
+> [!NOTE]
+> **Historical Design Note (May 2026):** This document represents the initial conceptual proposal (proposing Pyrogram and external vector DBs). For the production architecture, see [architecture_and_data_flow.md](architecture_and_data_flow.md) and [testing_and_verification.md](testing_and_verification.md).
+
 ## Overview
 
 This document describes a system for fetching Telegram messages from channels, storing them efficiently, filtering by topic, and enabling AI-powered interaction such as summarization and question-answering. The end goal is to turn channel discussions into a usable knowledge base.
