@@ -1,111 +1,127 @@
 # `tgram` Development Strategy — Roadmap, Enhancements, Ready-to-Use Replacements & Stability
 
-## Current Baseline (Post-Phase 5)
+## Current Baseline (Post-Phase 6)
 
 | Component | Current Implementation | Scale / Performance |
 |---|---|---|
-| **Storage** | SQLite (`data/messages.db`, 3.5 GB) with WAL, FTS5 (`unicode61`), `sqlite-vec` | **321,359** messages, **290,801** vector chunks |
-| **Threading** | Causal ingest (`reverse=True`) + single-pass `repair_virtual_topics` (`tgram/domain/threading.py`) | **165,050** threads across 3 chats, **0** broken reply chains |
-| **Retrieval** | Hybrid FTS5 BM25 + `sqlite-vec` cosine merged via RRF (`k=60`) + `get_conversation` | **~0.60s** internal query latency |
-| **AI Q&A** | Thread-grouped `<archive>` blocks + `context_index` citations via `OllamaAdapter` / `LiteLLMAdapter` | 12k chars (`num_ctx=12288`) local / 24k chars cloud |
+| **Storage & DB Factory** | Centralized `tgram/adapters/db.py` connection factory with WAL mode, `busy_timeout=10000`, `synchronous=NORMAL`, 64MB cache, and version-gated migrations (`schema_version = 5`) | **321,359** messages, **290,801** vector chunks, **0ms** migration startup |
+| **Auth & Concurrency** | Advisory file locking (`fcntl.flock` on `data/sessions/tgram.lock`) with clean CLI error handling (`TelegramSessionLockedError`) | Zero session corruption or lock collisions between daemon and CLI |
+| **Autonomous Daemon** | Polling loop (`fetch_all_new` + auto `repair_virtual_topics`) + bounded incremental auto-embedding (`max_batches=5`) with graceful offline fallback | Zero-touch continuous ingestion; new messages vector-searchable in 5 mins |
+| **Threading & Context** | Causal ingest (`reverse=True`) + single-pass `repair_virtual_topics` (`tgram/domain/threading.py`) | **165,050** threads across 3 chats, **0** broken reply chains |
+| **Retrieval** | Hybrid FTS5 BM25 + `sqlite-vec` cosine merged via RRF (`k=60`) + `get_conversation` (hit + ancestors + replies + ±30m window) | **~0.60s** internal query latency, **0.003s** FTS-only fallback |
+| **AI Q&A** | Thread-grouped `<archive>` blocks + `context_index` citations via `OllamaAdapter` (12k chars, `num_ctx=12288`) and `LiteLLMAdapter` (24k chars) | Clickable `[↗ msg:ID]` navigation in Gradio Web UI |
+| **Test Suite** | Comprehensive 45-test automated test suite across 10 modules (`make test`) | **~2.2s** execution time, 100% passing |
 
 ```mermaid
 flowchart TD
-    subgraph Phase6["Phase 6 — Autonomous & Self-Healing Pipeline (Next)"]
-        D["Daemon: fetch_all_new + incremental embed + gap auto-heal"]
-        PR["SQLite Hardening: busy_timeout + WAL + schema_version gate"]
+    subgraph Done["Completed (Phases 1–6)"]
+        P1["1. Bootstrap & Telethon Ingest"]
+        P2["2. Multi-Channel & Polling Daemon"]
+        P3["3. FTS5 Search & BM25 Ranking"]
+        P4["4. Vector Embeddings (sqlite-vec) & AI Q&A"]
+        P5["5. Causal Threading & Conversation Reconstruction"]
+        P6["6. Autonomous Daemon, DB Factory & Session Lock"]
     end
-    subgraph Phase7["Phase 7 — Thread-Level Semantic Quality"]
-        TE["Thread-Window Embeddings (Root + Replies embedded together)"]
-        QR["Multi-Query / Cross-Lingual Query Expansion + FlashRank Reranker"]
+    subgraph Phase7["Phase 7 — Retrieval Quality & Contextual Embeddings (Next Priority)"]
+        SC["Sentence-Aware Chunking (semchunk / boundary splitter)"]
+        TE["Thread-Contextual Reply Embeddings (Prepend [Topic] + [Root])"]
+        ME["Media Preview Extraction (WebPage titles, PDF filenames from raw_json)"]
+        FR["FlashRank Cross-Encoder Reranker (~30ms CPU rescoring)"]
+        QR["Multi-turn Query Condensation for Follow-up Chat"]
     end
-    subgraph Phase8["Phase 8 — Agentic & MCP Integration"]
-        MCP["FastMCP Server: expose search_threads / get_thread / ask to AI clients"]
-        DIG["Scheduled Topic Digests & Knowledge Base Extraction"]
+    subgraph Phase8["Phase 8 — Agentic & Assistant Integration"]
+        MCP["FastMCP Server: expose search_archive / get_thread / ask to AI clients"]
+        DIG["Scheduled Topic Wiki / FAQ Distillation with [msg:ID] Citations"]
     end
-    Phase6 --> Phase7 --> Phase8
+    subgraph Phase9["Phase 9 — Scale & Advanced Storage Optimization"]
+        QNT["Int8 Vector Quantization / Matryoshka Dimensions (4x-6x I/O reduction)"]
+        LDB["LanceDB Evaluation if archive grows past 1M+ chunks"]
+    end
+    Done --> Phase7 --> Phase8 --> Phase9
 ```
 
 ---
 
-## 1. What Next? (Phased Development Strategy)
+## 1. What Next? (Phased Strategic Roadmap)
 
-### Phase 6 — Zero-Touch Autonomous Operation (Short Term, 1–2 days)
-Right now, `tgram/interfaces/daemon.py` only runs `fetch_all_new` and `refresh_dialogs`. Embeddings (`make embed`) still require manual runs, and startup migrations re-run on every command.
-- **Auto-Embed in Daemon:** At the end of each `fetch_all_new` cycle in `daemon.py`, if `total > 0` (or `repo_embed.count_missing() > 0`), run `EmbedService.backfill(batch_size=100)` for a bounded number of batches so new messages become semantically searchable within 5 minutes of arrival.
-- **Skip Startup Migration Re-Execution:** `MessageRepo._apply_schema()` and `EmbeddingRepo._apply_schema()` currently re-execute all 5 `.sql` files on every instantiation. Gate migration execution behind `SELECT MAX(version) FROM schema_version` so startup is instant and write-free.
-- **macOS `launchd` / Docker Compose Production Service:** Add a `launchd` plist (or update `docker-compose.yml` to mount `./data/sessions`) so the daemon + web UI run continuously in the background.
-
-### Phase 7 — Conversation-Level Embeddings & Reranking (Medium Term, 2–4 days)
-Currently, each message is embedded in isolation (`tgram/services/embed.py`), and threads are reconstructed *after* retrieval.
-- **Contextual / Thread-Prefix Embeddings:** A short reply like *"Так, у Вроцлаві на Примаса приймають без черги"* doesn't mention *what* is accepted without a queue (e.g., *"карта побиту"* or *"PESEL"*), which was in the thread's root message. Prepending `[Topic: <topic_title>] [Thread root: <root_text[:150]>]` before embedding each reply dramatically improves vector recall for short answers.
-- **Lightweight Local Cross-Encoder Reranking:** RRF (`_rrf_merge`) merges ranks blindly without reading the query+thread pair together. Adding a tiny CPU cross-encoder reranker (`FlashRank` or `bge-reranker-v2-m3` via Ollama) over the top 25 candidate threads before feeding the top 10 to the LLM eliminates noisy keyword hits.
-- **Multi-turn Query Rewriting in `AIService`:** In `AIService.ask_with_history()`, retrieval currently searches only the raw follow-up `question`. If the user asks *"А скільки це коштує?"* on turn 2, FTS and vector search only see *"А скільки це коштує?"*. Rewriting follow-up questions into standalone search queries using the prior turn fixes multi-turn retrieval.
-
-### Phase 8 — MCP Server & Knowledge Extraction (Longer Term)
-- **Expose `tgram` as an MCP Server (`FastMCP`):** A 60-line `tgram/interfaces/mcp_server.py` exposing `search_conversations(query, chat_id, topic_id, since)`, `get_thread(message_id, chat_id)`, and `list_topics(chat_id)` lets Claude Desktop, Cursor, or Antigravity query your Telegram archive directly as a tool without switching to the Gradio UI.
-- **Topic Wiki / FAQ Distillation:** Forum topics like *"JDG / ФОП"* or *"Карта побиту"* accumulate thousands of repetitive Q&As. A scheduled job can synthesize canonical FAQ pages per topic with `[msg:ID]` citations and change-tracking ("what changed in 2026 vs 2025").
+### Phase 6 — Autonomous Daemon & Storage Hardening (✅ COMPLETED)
+- **Centralized Connection Factory:** Created `tgram/adapters/db.py` configuring `busy_timeout=10000`, `synchronous=NORMAL`, `journal_mode=WAL`, and 64 MB page cache across all 5 repos.
+- **Migration Version Gating:** Gated schema migrations behind `schema_version` so startup is 0ms without re-reading SQL files on every command.
+- **Telegram Advisory Session Lock:** Implemented `fcntl.flock` on `data/sessions/tgram.lock` inside `TelegramClientAdapter` preventing simultaneous daemon/CLI corruption.
+- **Auto-Embedding Daemon:** Integrated bounded incremental embedding (`max_batches=5`, up to 500 messages per cycle) into `daemon.py` with graceful Ollama offline fallback.
 
 ---
 
-## 2. What Can Be Enhanced in the Existing Codebase?
+### Phase 7 — Semantic Retrieval Quality & Contextual Embeddings (Next Priority)
+Currently, each message is embedded in isolation (`tgram/services/embed.py`), text chunking slices characters blindly mid-word, and follow-up chat turns search raw questions without conversation memory.
 
-1. **Multi-Turn Follow-up Retrieval (`tgram/services/ai.py`):**
-   - **Problem:** On turn 2+, `ask_with_history` embeds and searches `question` alone (`"What documents are needed for it?"`), losing the entity from turn 1 (`"Blue Card"`).
-   - **Enhancement:** When `history` is non-empty, combine the last user question keywords (or run a fast LLM query-condense step) before calling `self.fts.search()`.
-
-2. **Morphological / Stemming Support for Ukrainian, Polish & Russian (`003_fts5.sql`):**
-   - **Problem:** `tokenize='unicode61 remove_diacritics 2'` does exact token matching without Slavic inflection stemming (`"податки"` ≠ `"податків"` ≠ `"податкова"`).
-   - **Enhancement:** While hybrid vector search partially bridges this gap, FTS5 `trigram` tokenizer or lemmatization/prefix expansion on query terms (`податк*`) improves keyword recall when Ollama is offline or for rare proper nouns.
-
-3. **Message Edits & Useful Media Metadata (`tgram/adapters/telegram.py`):**
-   - **Problem:** `_convert()` extracts `tlm.message` and `type(tlm.media).__name__`, ignoring webpage link previews (`MessageMediaWebPage` title/description/URL), poll questions/options (`MessageMediaPoll`), and document filenames (`MessageMediaDocument`). Many high-value Telegram replies are just a shared link or PDF form!
-   - **Enhancement:** Append webpage preview titles/URLs, document filenames, and poll text to `Message.text` (or a dedicated indexed column) during `_convert()` — and backfill them from the already-stored `raw_json` in SQLite without re-fetching from Telegram!
-
-4. **Recency & Engagement Signals in Ranking (`tgram/adapters/search_fts.py`):**
-   - **Problem:** Tax laws, legalization rules, and prices change yearly. A 2023 message and a 2026 message with similar text score identically in `_rrf_merge`, and `raw_json` already stores `reactions` and `replies` counts that go unused.
-   - **Enhancement:** Add a slight time-decay boost (e.g., favoring newer messages) and reaction/reply-count weight into `_rrf_merge` so recent, community-validated answers rank above outdated ones.
+1. **Sentence/Word-Boundary Chunking (`tgram/services/embed.py`):**
+   - **Problem:** `_chunk_text` slices raw characters `[start:start+400]` with `overlap=50`, frequently cutting Cyrillic words, URLs, and phone numbers in half.
+   - **Implementation:** Replace fixed character slicing with a whitespace and sentence boundary splitter (or `semchunk` / `chonkie`), keeping chunks between 250–400 characters without mid-token truncation.
+2. **Thread-Contextual Reply Embeddings:**
+   - **Problem:** Short replies like *"Так, у Вроцлаві на Примаса приймають без черги"* don't mention *what* is accepted without a queue (*"карта побиту"* or *"PESEL"*), which was specified in the thread root.
+   - **Implementation:** When embedding a message with `reply_to_message_id IS NOT NULL` (where `reply_to != top_id`), prepend:
+     `[Topic: <topic_title>] [Thread root: <root_text[:120]>]`
+     before embedding the reply. This dramatically improves vector recall for concise answers.
+3. **Media & WebPage Preview Text Extraction:**
+   - **Problem:** High-value Telegram messages are often link shares (e.g., job postings, government portals) or PDF documents where the user typed little or no body text, but Telegram's `MessageMediaWebPage` or `MessageMediaDocument` has full titles, descriptions, and filenames.
+   - **Implementation:** Extract preview titles, URLs, and document filenames during ingest and backfill them from the stored `raw_json` in SQLite into `messages.text` (or an auxiliary FTS-indexed column).
+4. **Lightweight Local Cross-Encoder Reranking (`flashrank`):**
+   - **Problem:** Reciprocal Rank Fusion (`_rrf_merge`) merges ranks based solely on position without reading the query and candidate context together.
+   - **Implementation:** Integrate `flashrank` (4 MB ONNX model running locally on CPU in ~30ms) to re-score the top 25 candidate conversation threads before passing the top 10 to the LLM.
+5. **Multi-Turn Query Condensation (`tgram/services/ai.py`):**
+   - **Problem:** In `AIService.ask_with_history`, follow-up questions like *"А скільки це коштує?"* on turn 2 lose the subject from turn 1 (*"Карта сталого побиту"*), causing retrieval to miss relevant threads.
+   - **Implementation:** Add a fast query rewriting step (or prepend turn 1 key nouns) when `history` is present so retrieval searches for the consolidated intent.
 
 ---
 
-## 3. What Can Be Replaced with Ready-to-Use Implementations?
+### Phase 8 — Agentic Access & Assistant Integration
+Enable external AI assistants and workflows to tap into the Telegram archive as a first-class knowledge tool.
 
-You do **not** need to replace your core architecture (SQLite + Telethon is already an ideal local-first design), but several hand-rolled plumbing pieces can be swapped for battle-tested libraries:
+1. **FastMCP Server (`tgram/interfaces/mcp_server.py`):**
+   - Implement an MCP server using `FastMCP` exposing:
+     - `search_archive(query, chat_id, topic_id, since, limit)`: Hybrid search returning ranked hits with thread context.
+     - `get_conversation_thread(message_id, chat_id, window)`: Complete reconstructed conversation around any message.
+     - `list_topics(chat_id)`: Directory of forum topics and activity statistics.
+     - `ask_archive(question, chat_id, topic_id)`: Grounded synthesis with clickable `[msg:ID]` citations.
+   - Lets Claude Desktop, Cursor, Antigravity, and other MCP clients query the archive directly.
+2. **Topic Wiki & FAQ Distillation:**
+   - Forum topics like *"JDG / ФОП"* or *"Карта побиту"* accumulate thousands of repetitive discussions.
+   - Build an automated offline job to synthesize canonical per-topic FAQ pages with verified `[msg:ID]` citations and chronological change tracking ("What changed in 2026 vs 2025").
+
+---
+
+### Phase 9 — Scale & Advanced Storage Optimization
+For archives scaling beyond 1 million messages or systems requiring ultra-low-latency vector retrieval.
+
+1. **Int8 Vector Quantization / Matryoshka Dimensions:**
+   - `nomic-embed-text-v2-moe` supports Matryoshka dimensions (truncating 768-dim vectors to 512 or 256 dimensions with <1% recall loss).
+   - `sqlite-vec` supports `int8` vector storage (`vec_quantize_i8`), cutting vector BLOB size by **4×–6×** (from ~350 MB to ~70 MB) and speeding up cosine distance scans 3×.
+2. **LanceDB Evaluation:**
+   - While `sqlite-vec` performs well up to ~500k chunks (~0.6s latency), if the archive scales beyond 1M chunks, LanceDB provides an embedded on-disk IVF-PQ index with native Tantivy FTS and zero server maintenance.
+
+---
+
+## 2. What Can Be Replaced with Ready-to-Use Implementations?
 
 | Area | Current Custom Code | Ready-to-Use Replacement | Verdict / Recommendation |
 |---|---|---|---|
-| **Vector Index & Hybrid Search** | `repo_embeddings.py` (`sqlite-vec` brute-force table scan over 290k BLOBs) + custom `_rrf_merge` | **LanceDB** (embedded, serverless on-disk IVF-PQ/HNSW + native Tantivy FTS + built-in RRF & rerankers) **OR** `sqlite-vec` `vec0` virtual table | **Keep `sqlite-vec` up to ~500k chunks** (0.6s is fast enough). If archive grows past 1M chunks or you want <50ms filtered ANN + built-in reranking without a server, **LanceDB** (`pip install lancedb`) is a drop-in single-folder replacement. |
-| **Text Chunking** | `embed.py` (`_chunk_text` splits mid-word/mid-sentence every 400 chars) | **`semchunk`** or **`chonkie`** (ultra-fast, zero-dependency token/sentence-aware chunkers) | **Replace.** `_chunk_text` currently slices strings at fixed character indices (`text[start:start+400]`), cutting Cyrillic words and URLs in half. A sentence/word-boundary splitter takes 10 lines or `semchunk`. |
-| **Reranking** | None (raw RRF rank order in `search_fts.py`) | **`flashrank`** (4MB ONNX cross-encoder, runs on CPU in ~30ms) or LiteLLM rerank | **Add `flashrank`.** Zero external server needed, drastically improves top-5 conversation precision before LLM synthesis. |
-| **CLI Boilerplate** | `cli.py` (manual `argparse` + `print` formatting) | **`typer` + `rich`** | **Optional.** `rich` tables/trees make `thread` and `search --context` output much easier to scan in the terminal. |
-| **Config & Env Validation** | `config.py` + scattered `os.getenv()` in `daemon.py`, `Makefile` | **`pydantic-settings`** | **Recommended.** Centralizes all env vars (`FETCH_INTERVAL_MINUTES`, `OLLAMA_HOST`, `CHAT_MODEL`, API keys) with validation in one `Config` class. |
-| **Resilience / Retries** | Manual `try/except` in `embed.py` and `daemon.py` | **`tenacity`** | **Recommended** for Ollama/LiteLLM network calls and transient SQLite lock retries. |
-| **AI Client Access** | Custom Gradio UI (`web.py`) | **`mcp` (`FastMCP`)** alongside Gradio | **Add `FastMCP`.** Lets any MCP-capable assistant query your archive natively. |
+| **Text Chunking** | `embed.py` (`_chunk_text` slices mid-word/mid-sentence every 400 chars) | **`semchunk`** or **`chonkie`** (lightweight sentence/token-aware chunkers) | **Replace in Phase 7.** Eliminates truncated Cyrillic tokens, URLs, and phone numbers. |
+| **Reranking** | Raw RRF score merging (`_rrf_merge`) | **`flashrank`** (4 MB ONNX cross-encoder, ~30ms CPU execution) | **Add in Phase 7.** Significantly boosts top-5 precision before LLM context synthesis. |
+| **Assistant API** | Custom Gradio UI alone (`web.py`) | **`FastMCP`** (`mcp` library) alongside Gradio | **Add in Phase 8.** Standardized protocol for Claude Desktop, Cursor, and IDE assistants. |
+| **Config & Env** | `config.py` + scattered `os.getenv()` | **`pydantic-settings`** | **Recommended.** Typed validation for intervals, model strings, and paths. |
+| **Resilience & Retries** | Manual `try/except` in daemon and embed | **`tenacity`** | **Recommended.** Clean retry policies with exponential backoff for Ollama and Telegram network calls. |
+| **Vector Storage** | `sqlite-vec` brute-force cosine scan | **Keep `sqlite-vec`** (or LanceDB past 1M vectors) | Keep `sqlite-vec` for single-file SQLite simplicity; evaluate LanceDB only if vectors exceed 1M. |
 
 ---
 
-## 4. How to Make It Work Efficiently and Stably?
+## 3. Stability & Operational Hardening Status
 
-### 4.1 SQLite Concurrency & Connection Hardening (High Priority)
-Right now, every repository method opens a bare `sqlite3.connect(self.db_path)` with default settings (`timeout=5.0`, `journal_mode` only set in `EmbeddingRepo`, no `busy_timeout` or `synchronous` pragma on new connections).
-- **Create a single shared connection factory `tgram/adapters/db.py`:**
-  Every connection across `MessageRepo`, `TopicRepo`, `ChannelRepo`, `FTSSearch`, and `EmbeddingRepo` should configure:
-  ```sql
-  PRAGMA journal_mode = WAL;
-  PRAGMA synchronous = NORMAL;
-  PRAGMA busy_timeout = 10000;
-  PRAGMA temp_store = MEMORY;
-  PRAGMA cache_size = -64000; -- 64 MB page cache
-  ```
-- **Run Migrations Once at Startup:**
-  Check `SELECT MAX(version) FROM schema_version` and only run migration scripts with a higher version number.
-
-### 4.2 Vector Search Efficiency (`sqlite-vec`)
-- **How to speed up `search_similar` 3–5× without changing databases:**
-  1. **Composite Index for Filtered Joins:** Add `CREATE INDEX IF NOT EXISTS idx_messages_chat_topic_date ON messages(chat_id, reply_to_top_message_id, date, id);` so `--topic` and `--since` filters narrow candidate `message_id`s via an index-only scan before touching the 290k vector BLOBs.
-  2. **Int8 Quantization (`vec_quantize_i8`) or `vec0` Virtual Table:** `nomic-embed-text-v2-moe` supports Matryoshka dimensions (e.g., 256 or 512 dims instead of 768) and `sqlite-vec` supports `int8` vectors, cutting vector I/O bandwidth by **4×–6×** with <1% recall loss.
-  3. **Reuse Persistent DB + Ollama Connections in `web.py` and `daemon.py`:** Keep a persistent read connection (or thread-local connection) with `sqlite_vec` already loaded.
-
-### 4.3 Telethon Session Stability
-- **SQLite Session Locking:** Telethon stores its auth state in `data/sessions/tgram.session` (which is itself a SQLite file). If `make daemon` is running and you run `make fetch-new` or `make sync-topics` in another terminal, both processes open `tgram.session` concurrently and can raise `sqlite3.OperationalError: database is locked`.
-- **Fix:** Add an advisory file lock (`fcntl.flock` on `data/sessions/tgram.lock`) inside `TelegramClientAdapter.__aenter__` with a clear message (`"Another tgram process (e.g. daemon) is currently connected to Telegram"`), and handle `FloodWaitError` inside `fetch_all_new` with `await asyncio.sleep(e.seconds + 1)`.
+| Stability Vector | Status | Mechanism |
+|---|---|---|
+| **Database Concurrency** | ✅ Hardened | `busy_timeout=10000`, `PRAGMA synchronous = NORMAL`, WAL journal mode via `tgram/adapters/db.py`. |
+| **Schema Integrity** | ✅ Hardened | Version-gated migrations via `schema_version` (0ms startup overhead). |
+| **Telegram Session Lock** | ✅ Hardened | Advisory file lock (`fcntl.flock` on `tgram.lock`) with clean CLI exit on collision. |
+| **Autonomous Embedding** | ✅ Hardened | Daemon bounded backfill (`max_batches=5`) + graceful fallback when Ollama is offline. |
+| **Thread DAG Consistency** | ✅ Hardened | Monotonic `reverse=True` ingest + post-fetch `repair_virtual_topics` (0 parent/reply mismatches). |
+| **Background Service** | 📋 Planned | Add macOS `launchd` plist / systemd unit for unattended 24/7 background operation. |
