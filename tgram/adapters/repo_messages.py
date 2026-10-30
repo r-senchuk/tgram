@@ -79,15 +79,16 @@ class MessageRepo:
             ).fetchone()
             return row is not None
 
-    def existing_ids(self, chat_id: int, ids: list[int]) -> set[int]:
+    def existing_ids(self, chat_id: int, ids: list[int] | set[int]) -> set[int]:
         """Return the subset of message IDs that already exist in the database for chat_id."""
         if not ids:
             return set()
+        ids_list = list(ids)
         result: set[int] = set()
         CHUNK = 500
         with self._conn() as c:
-            for i in range(0, len(ids), CHUNK):
-                chunk = ids[i : i + CHUNK]
+            for i in range(0, len(ids_list), CHUNK):
+                chunk = ids_list[i : i + CHUNK]
                 placeholders = ",".join("?" for _ in chunk)
                 rows = c.execute(
                     f"SELECT id FROM messages WHERE chat_id = ? AND id IN ({placeholders})",

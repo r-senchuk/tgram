@@ -8,7 +8,7 @@ class Channel:
     title: str | None
     type: str                  # "channel" | "supergroup" | "group" | "private"
     is_forum: bool
-    last_fetched_id: int | None
-    oldest_fetched_id: int | None
-    last_fetch_at: datetime | None
-    enabled: bool
+    last_fetched_id: int | None = None
+    oldest_fetched_id: int | None = None
+    last_fetch_at: datetime | None = None
+    enabled: bool = False

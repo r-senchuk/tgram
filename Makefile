@@ -76,6 +76,10 @@ ask:
 web:
 	$(TGRAM) web $(_CHAT)
 
+# ── Tests ─────────────────────────────────────────────────────────────────────
+test:
+	$(PY) -m pytest -v
+
 .PHONY: list-chan channels channels-refresh channels-enable channels-disable \
         fetch-new fetch-old fetch-old-loop fetch-all fetch-scan status daemon \
-        sync-topics list-topics repair-threads thread rebuild-fts search embed ask web
+        sync-topics list-topics repair-threads thread rebuild-fts search embed ask web test
